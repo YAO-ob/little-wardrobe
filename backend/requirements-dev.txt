@@ -1,0 +1,4 @@
+-r requirements.txt
+pytest
+# ruff 在当前镜像上取不到 win_amd64 轮子，Lint 暂用 python -m compileall 兜底
+# ruff

@@ -1,0 +1,147 @@
+"""接口测试：上传 → 建单品 → 列表筛选 → 更新 → 删除。"""
+
+from __future__ import annotations
+
+import io
+
+from PIL import Image
+
+from app.config import get_settings
+
+
+def _jpeg(width: int = 800, height: int = 800, color=(120, 90, 60)) -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (width, height), color).save(buf, "JPEG", quality=85)
+    return buf.getvalue()
+
+
+def _upload(client, name: str = "a.jpg") -> dict:
+    res = client.post(
+        "/api/images",
+        files={"file": (name, _jpeg(), "image/jpeg")},
+    )
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+def test_health(client):
+    assert client.get("/healthz").json() == {"status": "ok"}
+
+
+def test_upload_returns_two_sizes(client):
+    image = _upload(client)
+    assert image["url"].endswith("_1024.webp")
+    assert image["thumb_url"].endswith("_256.webp")
+    assert client.get(image["url"]).status_code == 200
+    assert client.get(image["thumb_url"]).status_code == 200
+
+
+def _media_counts() -> tuple[int, int, int]:
+    settings = get_settings()
+    settings.ensure_dirs()
+    return (
+        len(list(settings.originals_dir.iterdir())),
+        len(list(settings.derived_dir.iterdir())),
+        len(list(settings.tmp_dir.iterdir())),
+    )
+
+
+def test_upload_only_touches_tmp(client):
+    """上传但不建单品：正式目录零新增，tmp 里躺着 原图 + 两档。"""
+    assert _media_counts() == (0, 0, 0)
+
+    image = _upload(client)
+
+    assert image["url"].startswith("/media/tmp/")
+    assert image["thumb_url"].startswith("/media/tmp/")
+    assert _media_counts() == (0, 0, 3)
+
+
+def test_attach_promotes_files_out_of_tmp(client):
+    """建单品成功后：tmp 清空，原图进 originals，两档进 derived，url 能打开。"""
+    image = _upload(client)
+    assert _media_counts() == (0, 0, 3)
+
+    item = client.post(
+        "/api/items",
+        json={"category": "top", "image_ids": [image["id"]]},
+    ).json()
+
+    assert _media_counts() == (1, 2, 0)
+    assert item["image"]["url"].startswith("/media/derived/")
+    assert client.get(item["image"]["url"]).status_code == 200
+    assert client.get(item["image"]["thumb_url"]).status_code == 200
+
+
+def test_image_ids_validation_does_not_move_files(client):
+    """挂图失败时不能把文件搬走。"""
+    stale = _upload(client)
+    client.post("/api/items", json={"category": "top", "image_ids": [stale["id"]]})
+
+    client.post("/api/items", json={"category": "top"})
+    fresh = _upload(client)
+
+    before = _media_counts()
+    res = client.post("/api/items", json={"category": "top", "image_ids": [stale["id"], fresh["id"]]})
+    assert res.status_code == 422
+    assert _media_counts() == before
+
+
+def test_reject_non_image(client):
+    res = client.post("/api/images", files={"file": ("note.txt", b"hello", "text/plain")})
+    assert res.status_code == 415
+
+
+def test_reject_corrupted_image(client):
+    res = client.post("/api/images", files={"file": ("broken.jpg", b"xxxx", "image/jpeg")})
+    assert res.status_code == 415
+
+
+def test_create_and_list(client):
+    image = _upload(client)
+    res = client.post(
+        "/api/items",
+        json={"category": "bottom", "warmth": 3, "occasion": "work", "image_ids": [image["id"]]},
+    )
+    assert res.status_code == 201, res.text
+    item = res.json()
+    assert item["category"] == "bottom"
+    assert item["image"]["id"] == image["id"]
+    assert item["name"] == "下装"  # 无名字时按品类兜底
+
+    listing = client.get("/api/items", params={"category": "bottom"}).json()
+    assert listing["total"] >= 1
+    assert all(i["category"] == "bottom" for i in listing["items"])
+
+
+def test_incomplete_filter(client):
+    assert client.post("/api/items", json={"category": "shoes"}).status_code == 201
+    complete = client.post("/api/items", json={"category": "shoes", "color_family": "黑"}).json()
+
+    listing = client.get("/api/items", params={"incomplete": "true"}).json()
+    ids = {item["id"] for item in listing["items"]}
+    assert complete["id"] not in ids
+    assert all(not item["color_family"] for item in listing["items"])
+
+
+def test_image_id_must_be_unclaimed(client):
+    image = _upload(client)
+    first = client.post("/api/items", json={"category": "top", "image_ids": [image["id"]]})
+    assert first.status_code == 201
+
+    second = client.post("/api/items", json={"category": "top", "image_ids": [image["id"]]})
+    assert second.status_code == 422
+
+
+def test_patch_and_delete(client):
+    item = client.post("/api/items", json={"category": "dress"}).json()
+
+    patched = client.patch(
+        f"/api/items/{item['id']}",
+        json={"color_family": "红", "season": ["summer"], "warmth": 1},
+    ).json()
+    assert patched["color_family"] == "红"
+    assert patched["season"] == ["summer"]
+
+    assert client.delete(f"/api/items/{item['id']}").status_code == 204
+    assert client.get(f"/api/items/{item['id']}").status_code == 404

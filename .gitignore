@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+# 本机沙箱专用的依赖目录（pip --target）
+backend/.pyenv/
+
+# Node
+node_modules/
+dist/
+.vite/
+*.tsbuildinfo
+
+# 本地数据与密钥
+.env
+.env.local
+data/
+media/originals/
+media/derived/
+media/tmp/
+*.db
+*.db-wal
+*.db-shm
+*.sqlite3
+
+# 沙箱临时目录与 pip / pnpm 缓存
+.tmp/
+.pipcache/
+.pnpm-store/
+pytest-cache-files-*/
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
