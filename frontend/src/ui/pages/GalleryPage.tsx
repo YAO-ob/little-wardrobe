@@ -1,14 +1,20 @@
-import { useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { listItems } from '../../core/api'
+import { useEffect, useMemo, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { deleteItem, listItems } from '../../core/api'
+import { resolveDeleteClick } from '../../core/deleteConfirm'
 import { CATEGORIES, CATEGORY_LABEL, OCCASIONS, OCCASION_LABEL, WARMTH_LABEL } from '../../core/labels'
-import type { Category, Occasion } from '../../core/types'
+import type { Category, Item, Occasion } from '../../core/types'
+import { toast } from '../../adapters/toast'
 
 export default function GalleryPage() {
+  const queryClient = useQueryClient()
   const [categories, setCategories] = useState<Category[]>([])
   const [occasion, setOccasion] = useState<Occasion | null>(null)
   const [incompleteOnly, setIncompleteOnly] = useState(false)
   const [q, setQ] = useState('')
+  const [deletingId, setDeletingId] = useState<number | null>(null)
+  // 处于「确认删除」状态的卡片；null 表示没有
+  const [confirmingId, setConfirmingId] = useState<number | null>(null)
 
   const filter = useMemo(
     () => ({ category: categories, occasion: occasion ?? undefined, incomplete: incompleteOnly, q }),
@@ -26,10 +32,43 @@ export default function GalleryPage() {
     )
   }
 
+  // 软删除：只打 deleted_at，media 文件与 images.item_id 都不动
+  async function remove(item: Item) {
+    setDeletingId(item.id)
+    try {
+      await deleteItem(item.id)
+      await queryClient.invalidateQueries({ queryKey: ['items'] })
+      toast('已删除')
+    } catch (err) {
+      toast(err instanceof Error ? err.message : '删除失败')
+    } finally {
+      setDeletingId(null)
+      setConfirmingId(null)
+    }
+  }
+
+  function onDeleteClick(item: Item) {
+    const action = resolveDeleteClick(confirmingId, item.id)
+    if (action.type === 'arm') setConfirmingId(action.id)
+    else void remove(item)
+  }
+
+  // 换筛选 / 改搜索词就把待确认状态收回，避免「确认」跨上下文残留
+  useEffect(() => {
+    setConfirmingId(null)
+  }, [filter])
+
   const items = data?.items ?? []
 
   return (
-    <div className="space-y-3">
+    <div
+      className="space-y-3"
+      onClick={(event) => {
+        // 点在别处（不是任何删除按钮）就收回待确认状态
+        const target = event.target as HTMLElement | null
+        if (confirmingId !== null && !target?.closest('.card-delete')) setConfirmingId(null)
+      }}
+    >
       <input
         value={q}
         onChange={(e) => setQ(e.target.value)}
@@ -104,7 +143,10 @@ export default function GalleryPage() {
             {items.map((item) => {
               const incomplete = !item.color_family
               return (
-                <figure key={item.id} className="relative overflow-hidden rounded-xl bg-white shadow-sm">
+                <figure
+                  key={item.id}
+                  className="group relative overflow-hidden rounded-xl bg-white shadow-sm"
+                >
                   {item.image ? (
                     <img
                       src={item.image.thumb_url}
@@ -118,10 +160,28 @@ export default function GalleryPage() {
                     </div>
                   )}
                   {incomplete && (
-                    <span className="absolute right-1 top-1 rounded-full bg-amber-500/90 px-1.5 py-0.5 text-[10px] text-white">
+                    <span className="absolute left-1 top-1 rounded-full bg-amber-500/90 px-1.5 py-0.5 text-[10px] text-white">
                       信息不全
                     </span>
                   )}
+                  <button
+                    type="button"
+                    onClick={() => onDeleteClick(item)}
+                    disabled={deletingId === item.id}
+                    data-armed={confirmingId === item.id}
+                    aria-label={
+                      confirmingId === item.id ? `确认删除${item.name}` : `删除${item.name}`
+                    }
+                    className={`card-delete pointer-events-auto absolute right-1 top-1 z-10 flex min-h-6 min-w-11 items-center justify-center rounded-full p-1.5 text-[10px] leading-none text-white transition-colors disabled:opacity-40 ${
+                      confirmingId === item.id ? 'bg-red-600' : 'bg-black/65'
+                    }`}
+                  >
+                    {deletingId === item.id
+                      ? '删除中'
+                      : confirmingId === item.id
+                        ? '确认删除'
+                        : '删除'}
+                  </button>
                   <figcaption className="space-y-0.5 px-2 py-1.5">
                     <p className="truncate text-xs font-medium">
                       {CATEGORY_LABEL[item.category] ?? item.category}

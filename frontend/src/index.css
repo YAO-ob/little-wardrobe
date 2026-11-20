@@ -16,3 +16,17 @@ body {
   color: var(--color-ink);
   -webkit-tap-highlight-color: transparent;
 }
+
+/* 图库卡片上的删除入口：触屏常显；鼠标设备 hover 卡片或键盘聚焦时才出现。
+   单独写规则而不是堆 Tailwind 任意变体，避免嵌套 @media 的兼容性问题。 */
+@media (hover: hover) {
+  .card-delete {
+    opacity: 0;
+  }
+
+  .group:hover .card-delete,
+  .card-delete:focus-visible,
+  .card-delete[data-armed='true'] {
+    opacity: 1;
+  }
+}

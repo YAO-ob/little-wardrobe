@@ -124,6 +124,23 @@ def test_incomplete_filter(client):
     assert all(not item["color_family"] for item in listing["items"])
 
 
+def test_missing_staged_file_fails_loudly(client):
+    """暂存文件被删掉后再建单品：必须 500，且不留下半个单品。"""
+    image = _upload(client)
+    settings = get_settings()
+    for path in settings.tmp_dir.iterdir():
+        path.unlink()
+
+    total_before = client.get("/api/items", params={"limit": 1}).json()["total"]
+    res = client.post("/api/items", json={"category": "top", "image_ids": [image["id"]]})
+
+    assert res.status_code == 500
+    assert "暂存文件丢失" in res.json()["detail"]
+    assert client.get("/api/items", params={"limit": 1}).json()["total"] == total_before
+    assert list(settings.originals_dir.iterdir()) == []
+    assert list(settings.derived_dir.iterdir()) == []
+
+
 def test_image_id_must_be_unclaimed(client):
     image = _upload(client)
     first = client.post("/api/items", json={"category": "top", "image_ids": [image["id"]]})

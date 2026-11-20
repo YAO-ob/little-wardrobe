@@ -45,6 +45,21 @@ def _staged_stem(image: Image) -> str | None:
     return name[: -len(suffix)]
 
 
+def _staged_files(image: Image) -> list[str]:
+    """这张图在 tmp 里应有的相对路径（派生图两档）。"""
+    if not image.path.startswith("tmp/"):
+        return []
+    return [v for v in (image.path, image.thumb_path) if v and v.startswith("tmp/")]
+
+
+def _assert_staged_files(image: Image) -> None:
+    """搬之前先确认文件都在：缺了就直接报 500，别静默跳过留下指向 tmp 的路径。"""
+    settings = get_settings()
+    missing = [rel for rel in _staged_files(image) if not (settings.media_dir / rel).exists()]
+    if missing:
+        raise HTTPException(status_code=500, detail="暂存文件丢失，请重新上传")
+
+
 def _promote(image: Image) -> None:
     """把 media/tmp 下的原图与两档派生图搬进正式目录，并改写 path。"""
     if not image.path.startswith("tmp/"):
@@ -67,7 +82,8 @@ def _promote(image: Image) -> None:
             continue
         src = settings.media_dir / value
         if not src.exists():
-            continue
+            # 正常情况下 _assert_staged_files 已经拦住了，这里是兜底
+            raise HTTPException(status_code=500, detail="暂存文件丢失，请重新上传")
         os.replace(src, settings.derived_dir / src.name)
         setattr(image, attr, f"derived/{src.name}")
 
@@ -90,6 +106,9 @@ def _attach_images(db: Session, item: Item, image_ids: list[int]) -> None:
             status_code=422,
             detail=f"以下图片不存在或已被占用：{sorted(missing)}",
         )
+    # 先全部校验再搬，避免搬到一半失败留下半套文件
+    for image in images:
+        _assert_staged_files(image)
     for index, image in enumerate(images):
         _promote(image)
         image.item_id = item.id
@@ -117,7 +136,12 @@ def create_item(payload: ItemCreate, db: Session = Depends(get_db)) -> ItemOut:
     )
     db.add(item)
     db.flush()
-    _attach_images(db, item, payload.image_ids)
+    try:
+        _attach_images(db, item, payload.image_ids)
+    except Exception:
+        # 挂图失败（暂存文件丢失 / id 非法）：整条回滚，不留下半个单品
+        db.rollback()
+        raise
     db.commit()
     return item_to_out(_load(db, item.id))
 

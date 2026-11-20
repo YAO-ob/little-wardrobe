@@ -174,4 +174,71 @@ PowerShell 的 `Get-Content`/`Set-Content` 在这台机器上会按 GBK 读写�
 - 不上 `@testing-library/react`：pnpm 嵌套 node_modules 下 React 会出现两份实例，`Invalid hook call`，且本机沙箱起不了浏览器，组件级渲染测试跑不通。组件行为靠人工点，逻辑行为靠单测。
 - vitest 必须用 `pool: 'threads'`：默认 forks 池要 spawn 带管道的子进程，沙箱直接 `EPERM`。
 
+## 18. 第 0 项修补 + N0c 图库删除（2026-11-21）
+
+### 暂存文件丢失要立刻炸
+
+`_promote()` 原来在派生图缺失时 `continue`，结果 `images.path` 还指着 `tmp/...`，接口照样返回一个能打开的 URL，问题要等到下次重启 `clear_tmp` 才露出来。改成抛 `HTTPException(500, "暂存文件丢失，请重新上传")`。
+
+配套两点：
+
+- `_attach_images` 先对**所有**待挂图片做存在性校验，再统一搬迁，避免「搬到一半失败」留下半套文件。
+- `create_item` 在挂图阶段异常时 `db.rollback()`，不留下半个单品（原来只靠 session 关闭隐式回滚，不明确）。
+
+### 删除语义（钉死，不扩展）
+
+- `DELETE /api/items/{id}` 只写 `deleted_at`（软删）；**media 文件不动，`images.item_id` 不动**。
+- 不做回收站、不做彻底删除、不做批量删、不做撤销。
+- 图库卡片右上角一个「删除」，`window.confirm` 确认（不做自定义弹层），成功后 `invalidateQueries(['items'])`，失败走 toast，不静默。
+- 显示规则：触屏常显；鼠标设备 hover 卡片或键盘 focus 才出现。用 `index.css` 里一条 `.card-delete` 规则实现，不堆 Tailwind 任意变体（嵌套 `@media` 的兼容性不值得赌）。
+- 副作用（有意为之）：软删的单品在库里仍占一行，图片文件永久保留。要回收得另做清理任务，超出本轮范围。
+
+## 19. 图库删除点了没反应：定位与改法（2026-11-21）
+
+### 现象
+
+hover 能看到「删除」，点下去既没有 `window.confirm` 弹窗，也没有任何变化或提示。
+
+### 判定（结论 + 证据 + 没做到的部分）
+
+**没做到**：`elementFromPoint` 那段 DevTools 脚本我没法在这台机器上跑——沙箱里 Edge 起不来（crashpad `OpenProcess: 拒绝访问`），没有浏览器可开。所以「是不是被别的元素盖住」这一条**没有实测**，只能给代码层判断和一条给用户的一步验证法。
+
+**代码层判断**：遮挡的可能性低。
+
+- 删除按钮是 `figure` 内最后一个子元素，`position: absolute`，现在再加了 `z-10` + `pointer-events-auto`；
+- 「信息不全」角标原来也在右上，本轮移到了左上，右上只剩这个按钮；
+- 卡片里没有其他定位元素，`img` 是 static 流内元素，不会盖住绝对定位的按钮。
+
+**症状与「原生对话框被静默拦截」完全吻合**：`window.confirm` 在两种情况下直接返回 false、不留任何痕迹——用户勾过浏览器「阻止此页面创建更多对话框」，或页面处在没有 `allow-modals` 的 iframe 里。表现就是「点了没反应」。
+
+**一步验证法**（下次遇到时）：打开 DevTools → Network，点第二次「确认删除」。
+
+- 有 `DELETE /api/items/{id}` 请求 → 说明点击命中了，问题在别处；
+- 没有请求 → 说明 `confirm` 之前就返回了。
+
+现在这条路径已经不依赖 `confirm`，两种情况下都能走通。
+
+### 改法
+
+1. **去掉 `window.confirm`**，改成按钮内二次确认：第一次点变「确认删除」（红底、`data-armed="true"`，靠 CSS 强制保持可见），第二次点同一张才真删。状态机抽到 `core/deleteConfirm.ts`（`resolveDeleteClick`），有 4 条单测。
+2. **状态复原**：切筛选/改搜索词（`useEffect` 依赖 filter）、点卡片以外的地方（容器 `onClick` 里判断 `closest('.card-delete')`）、点别的卡片（切换到那张）都会复位。没有计时器。
+3. **命中区硬化**：`z-10`、`pointer-events-auto`、`p-1.5`、`min-h-6 min-w-11`，不再只靠 `text-[10px]` 撑尺寸。
+4. **失败必有反馈**：`deleteItem` 抛错走 `toast(err.message)`，成功 `toast('已删除')`，任何分支都不静默。
+
+### 顺带发现：dev server 会喂旧模块
+
+改完代码后我核对 dev server 实际返回的模块，发现它是**旧的**（源码里有 `data-armed`，返回的模块里没有）。原因是这个 vite 实例长时间运行、watcher 早前报过 `EBUSY`。重启 `dev.cmd` 后恢复正常。
+
+**规矩**：改完 UI 先确认 dev server 返回的模块里有新标识（比如 `data-armed`），或者直接重启；否则「改了没生效」会被误判成代码问题。
+
+### 验收状态
+
+| 项 | 状态 |
+|---|---|
+| 前端单测 | 23 passed（原 19 + 删除状态机 4） |
+| typecheck / build | 0 / 0 |
+| 产物 CSS 含 `.min-h-6` `.min-w-11` `.z-10` `.pointer-events-auto` `[data-armed='true']` | 已确认 |
+| dev server 返回新模块（含 `data-armed`、无 `window.confirm`） | 已确认 |
+| 浏览器里真点两下删掉一张 | **未执行**（无浏览器），需人工点 |
+
 
