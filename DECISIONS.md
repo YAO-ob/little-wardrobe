@@ -241,4 +241,33 @@ hover 能看到「删除」，点下去既没有 `window.confirm` 弹窗，也�
 | dev server 返回新模块（含 `data-armed`、无 `window.confirm`） | 已确认 |
 | 浏览器里真点两下删掉一张 | **未执行**（无浏览器），需人工点 |
 
+## 20. N0b：outfit / outfit_items + wear_log 视图（2026-11-21）
+
+迁移 `cc1bfe59e040`，接在 baseline `9f64bc6d95b5` 之后。本轮**只出表结构与迁移**：不写接口、不写规则、不写推荐。
+
+### 表结构
+
+- `outfits`：`id` / `worn_on`(YYYY-MM-DD，非空) / `weather_json`(可空) / `note` / `created_at` / `deleted_at`（与 items 一致的软删）。
+- `outfit_items`：`id` / `outfit_id`(FK→outfits, CASCADE, 索引) / `item_id`(FK→items, CASCADE, 索引) / `layer`(inner|mid|outer, 可空)，`UNIQUE(outfit_id, item_id)` 保证同一次搭配不会出现两件相同的。
+- 没有加任何业务字段。`weather_json` 留着是刻意的：不存天气快照，以后就永远解释不了「当时为什么这么配」。
+
+### 口径修正：视图只展平，不聚合
+
+上一轮的设想是「wear_log 视图直接给近 30 天穿着次数」，**作废**。
+
+- 视图只展平：`item_id` / `outfit_id` / `worn_on`，过滤 `o.deleted_at IS NULL`。
+- 「近 30 天」是**查询期策略参数**，焊进视图以后想改就得再写一个迁移，不划算。
+- 穿着次数仍然在查询时 `COUNT`，**不存冗余计数字段**——第 8 节「避免计数漂移」的前提没变，变的只是聚合发生在哪一层（从视图里挪到查询里）。
+- 视图 autogenerate 抓不到，`op.execute` 手写；`downgrade` 必须**先 DROP VIEW 再 drop 两张表**，顺序反了会因依赖报错。
+
+### 验收（已执行）
+
+| 项 | 结果 |
+|---|---|
+| a) 空库 `upgrade head` | 表：`items` / `images` / `outfits` / `outfit_items` / `alembic_version`；视图：`wear_log` |
+| b) `downgrade -1` → `upgrade head` | 降级后两张表与视图都不在；再升级全部回来 |
+| c) 插 2 条 outfit_items 后查视图 | `wear_log` 返回 2 行，(`item_id`, `outfit_id`, `worn_on`) 都对 |
+| d) 后端测试 | 16 passed，不回退 |
+| 真实库 | 启动时自动升到 `cc1bfe59e040`，57 件单品未动，`outfits` 0 行 |
+
 

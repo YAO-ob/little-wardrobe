@@ -4,7 +4,16 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .db import Base
@@ -63,3 +72,40 @@ class Image(Base):
     created_at: Mapped[str] = mapped_column(String(32), default=utcnow)
 
     item: Mapped[Item | None] = relationship(back_populates="images")
+
+
+class Outfit(Base):
+    """一次「今天穿这套」。"""
+
+    __tablename__ = "outfits"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    worn_on: Mapped[str] = mapped_column(String(10), nullable=False)  # YYYY-MM-DD
+    # 当天天气快照（温度区间/体感/降水），不存就永远解释不了"当时为什么这么配"
+    weather_json: Mapped[str | None] = mapped_column(Text)
+    note: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(String(32), default=utcnow)
+    deleted_at: Mapped[str | None] = mapped_column(String(32))
+
+    items: Mapped[list[OutfitItem]] = relationship(
+        back_populates="outfit",
+        cascade="all, delete-orphan",
+    )
+
+
+class OutfitItem(Base):
+    """搭配里的每一件（同一次搭配不许同一件出现两次）。"""
+
+    __tablename__ = "outfit_items"
+    __table_args__ = (UniqueConstraint("outfit_id", "item_id", name="uq_outfit_item"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    outfit_id: Mapped[int] = mapped_column(
+        ForeignKey("outfits.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    item_id: Mapped[int] = mapped_column(
+        ForeignKey("items.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    layer: Mapped[str | None] = mapped_column(String(8))  # inner / mid / outer
+
+    outfit: Mapped[Outfit] = relationship(back_populates="items")
