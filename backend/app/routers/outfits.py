@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..db import get_db
-from ..models import Item, Outfit, OutfitItem
+from ..models import Item, Outfit, OutfitItem, utcnow
 from ..rules import layer_of
 from ..schemas import OutfitCreate, OutfitListOut, OutfitOut
 
@@ -94,3 +94,13 @@ def list_outfits(
             for row in rows
         ],
     )
+
+
+@router.delete("/{outfit_id}", status_code=204)
+def delete_outfit(outfit_id: int, db: Session = Depends(get_db)) -> None:
+    """软删：只打 deleted_at。outfit_items 不动，wear_log 视图会自动过滤掉。"""
+    outfit = db.get(Outfit, outfit_id)
+    if outfit is None or outfit.deleted_at:
+        raise HTTPException(status_code=404, detail="搭配不存在")
+    outfit.deleted_at = utcnow()
+    db.commit()

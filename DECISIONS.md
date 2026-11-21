@@ -444,7 +444,8 @@ DIFF_SPREAD=9      DIFF_FEELS_MIN=18
 - `layer` 用 `rules.layer_of(category)` 填：top/dress→inner、outer→outer、其余 null。
 - **同一套重复提交不去重**：那是「今天又穿了这套」，是合法记录。
 - `GET /api/outfits?limit=20`：带 `item_ids`，够当前验证用，历史页留给以后。
-- 不做编辑 / 删除 / 撤销（按范围）。
+- `DELETE /api/outfits/{id}`（N3b）：软删只打 `deleted_at`，`outfit_items` 不动——`wear_log` 视图本来就按 `outfits.deleted_at IS NULL` 过滤，所以删完视图里自然没有这几行。id 不存在或已删都返回 404。
+- 不做编辑 / 撤销（按范围）。
 
 ### 前端
 
@@ -466,6 +467,13 @@ DIFF_SPREAD=9      DIFF_FEELS_MIN=18
 **未执行**：浏览器里真点「就穿这套」。沙箱起不了浏览器，所以按「前端会发的请求」原样发了一遍 HTTP 并查了库——按钮禁用与 toast 属于纯 UI 行为，仍需你点一次确认。
 
 验收期间真的落了一条记录：`outfits.id=1`、`worn_on=2026-11-21`、5 件单品、note「规则推荐 · casual」。不想留可以直接 SQL 删，或者告诉我处理。
+
+### N3b 收尾
+
+- 加了 `DELETE /api/outfits/{id}`，3 条测试（软删、重复删 404、不存在 404），总数 84 passed。
+- 用接口（不是改库）删掉了测试搭配：库里当时有 4 条（id 1–4，比你提的 3 条多一条），全部 `DELETE` 返回 204；删后 `GET /api/outfits` → `total=0`、`wear_log` → 0 行、`outfit_items` 17 行原样保留（软删语义）。
+- 搭配页天气条右下角加了一行 `数据来源 Open-Meteo`（`text-[10px] text-black/25`），Open-Meteo 的署名要求现在页面上也满足了，不只在 README。
+- README 顶部改成「W1 完成 · W2 完成 · W3 进行中」，已补的缺口（Alembic、孤儿图、图库删除 UI）划掉并注明补法。
 
 ### 顺带发现的环境问题
 

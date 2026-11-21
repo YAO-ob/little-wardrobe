@@ -82,6 +82,9 @@ export default function OutfitPage() {
         {weather.stale && (
           <p className="mt-1 text-[11px] text-amber-600">天气可能不是最新（上游暂时不可用）</p>
         )}
+        <p className="mt-1 text-right text-[10px] leading-none text-black/25">
+          数据来源 Open-Meteo
+        </p>
       </section>
 
       <div className="grid grid-cols-4 gap-2">

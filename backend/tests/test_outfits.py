@@ -119,3 +119,34 @@ def test_list_outfits_returns_item_ids(client):
     assert listing["total"] >= 1
     row = next(o for o in listing["outfits"] if o["id"] == created["id"])
     assert row["item_ids"] == [top["id"], bottom["id"]]
+
+
+def test_delete_outfit_is_soft(client):
+    top = _item(client, "top")
+    created = client.post("/api/outfits", json={"item_ids": [top["id"]]}).json()
+
+    assert client.delete(f"/api/outfits/{created['id']}").status_code == 204
+
+    listing = client.get("/api/outfits", params={"limit": 100}).json()
+    assert all(row["id"] != created["id"] for row in listing["outfits"])
+
+    from app.db import SessionLocal
+
+    with SessionLocal() as db:
+        outfit = db.get(Outfit, created["id"])
+        assert outfit is not None and outfit.deleted_at is not None
+        # outfit_items 不动
+        links = db.query(OutfitItem).filter(OutfitItem.outfit_id == created["id"]).all()
+        assert len(links) == 1
+
+
+def test_delete_outfit_twice_returns_404(client):
+    top = _item(client, "top")
+    created = client.post("/api/outfits", json={"item_ids": [top["id"]]}).json()
+
+    assert client.delete(f"/api/outfits/{created['id']}").status_code == 204
+    assert client.delete(f"/api/outfits/{created['id']}").status_code == 404
+
+
+def test_delete_missing_outfit_returns_404(client):
+    assert client.delete("/api/outfits/999999").status_code == 404
