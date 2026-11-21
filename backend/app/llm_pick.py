@@ -53,6 +53,7 @@ class PickResult:
     source: str  # "llm" | "rules"
     attempts: int
     fallback_reason: str | None = None
+    usage: dict[str, int | None] | None = None
 
 
 def build_pool(facts: WeatherFacts, items: list[RuleItem], occasion: str | None) -> list[RuleItem]:
@@ -198,7 +199,7 @@ async def pick_with_llm(
                 "请修正后重新输出 JSON。"
             )
         try:
-            payload = await chat_json(config, SYSTEM_PROMPT, prompt)
+            payload, usage = await chat_json(config, SYSTEM_PROMPT, prompt)
         except LLMError as exc:
             elapsed = (time.perf_counter() - started) * 1000
             _log(
@@ -215,7 +216,7 @@ async def pick_with_llm(
             reason = str(payload.get("reason") or "").strip() or "按今天的天气和场合配的"
             elapsed = (time.perf_counter() - started) * 1000
             _log(source="llm", attempts=attempt, fallback=None, elapsed_ms=elapsed, api_key=config.api_key)
-            return PickResult(tuple(chosen), reason, "llm", attempt, None)
+            return PickResult(tuple(chosen), reason, "llm", attempt, None, usage)
 
         fallback_reason = "invalid_ids" if any("候选池" in p for p in problems) else "invalid_outfit"
 

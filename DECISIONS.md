@@ -618,6 +618,96 @@ sport   ids=[9, 34, 3]            -> source=llm attempts=1 fallback=None
 - 只重试超时，且只重试一次；TLS 若持续抽风仍会 502。
 - **没有持久化「上次成功的天气」**：进程重启后无缓存可用，冷启动撞上不可用窗口就是 502。这条留给 W4 部署阶段（需要新表或落盘文件），本轮按范围不做。
 
+## 27. N6：模型调用指标落库（2026-11-21）
+
+### 表
+
+`llm_metrics`（迁移 `4daad94c5afe`）：`id / created_at / mode / source / cached / attempts / fallback_reason / latency_ms / model / tokens_prompt / tokens_completion / is_byok`。`created_at` 建了索引，`/api/metrics` 按它过滤。
+
+只记 `mode=llm` 的请求——`mode=rules` 是纯本地计算，记进来只会稀释成功率。
+
+### usage 透传
+
+`chat_json` 的返回值从 `dict` 改成 `(data, usage)`，`usage = {prompt_tokens, completion_tokens}`。**取不到就是 `None`，不填 0**——0 是「真的花了 0 个 token」，None 是「上游没告诉我们」，两者在成本统计里含义完全不同。`llm_pick` 把它塞进 `PickResult.usage`，路由层负责落库。
+
+### 记录点
+
+- 路由结束时写一行，**成功 / 降级 / 限流 / 无 key 都写**，`cached=true` 也写（这样能算缓存命中率）。
+- 命中缓存那行的 `attempts=0`：这次请求确实没调模型（接口返回的 `attempts` 仍是缓存里记录的调用次数，两个语义分开）。
+- 整段写入包在 `try/except` 里，失败只 `logger.warning(..., exc_info=True)` + `rollback()`，**不影响响应**。
+- 日志仍是原来那六个字段，**不加 token**：日志用来排障，指标用来算账，两条路。
+
+### 聚合
+
+`GET /api/metrics?days=7`（1–90）：
+
+- `total_calls` / `llm_success`（source=llm 且未命中缓存）/ `cache_hits` / `fallbacks` / `fallback_by_reason` / `by_model` / `tokens` / `byok_calls` / `server_key_calls`。
+- `latency_ms` 的 **p50/p95 用 SQL `ORDER BY … LIMIT 1 OFFSET n` 取**，不把整表拉进内存；`avg` 走 `AVG()`。offset 用 `int(total×分位)` 并夹在 `total-1` 内，是近似分位（够用，不追求严格插值）。
+
+### 验证
+
+单测 7 条（`backend/tests/test_metrics.py`，全 mock 上游）：
+
+| 场景 | 断言 |
+|---|---|
+| 成功一次 | 1 行；`source=llm`、`cached=false`、`attempts=1`、tokens=82/15、`is_byok=true` |
+| 429 降级 | 1 行；`source=rules`、`fallback_reason=rate_limited`、tokens 为 None |
+| 无 key | 1 行；`fallback_reason=no_key`、`attempts=0`、`model=None` |
+| 缓存命中 | 两次请求两行，第二行 `cached=true`、`attempts=0`，上游只调 1 次 |
+| 写指标失败 | `Session.commit` 抛异常时接口仍 200 |
+| 聚合 | 插入 6 条新 + 1 条 30 天前：`total=6`、`llm_success=4`、`cache_hits=1`、`fallbacks=1`、`tokens=320/80`、`byok=5`、`avg=200.0`、`p95>=p50` |
+| days 校验 | 0 和 91 都 422 |
+
+全量 **144 passed**。
+
+**真实库验收**（8001，无 key 连打 20 次，用 no_key 路径验证记录与聚合，不消耗额度）：
+
+```
+before: total_calls=0
+after : total_calls=20, fallbacks=20, fallback_by_reason={"no_key": 20},
+        server_key_calls=20, latency_ms={"avg":50.8,"p50":2,"p95":975}
+```
+
+数字与手数完全对得上（第一次 975ms 含取天气，之后天气命中缓存都是 2ms，所以 avg 被拉低）。这 20 行留在库里，不需要可以 `DELETE FROM llm_metrics`。
+
+### 局限
+
+- 不清理旧指标：表会一直长，行数多了要加定期删除（本轮按范围不做）。
+- 不做 Prometheus 格式，也不做前端图表。
+- p50/p95 是 offset 近似分位，不是严格插值。
+- 指标落的是**单库单进程**口径；将来多实例部署时这张表会变成共享计数，反而正好可以用。
+
+### 口径修正（N6b）：by_model 曾经虚高
+
+**现象**：实测 `/api/metrics` 里 `by_model=14`，而真实模型调用只有 1 次。
+
+**原因**：`by_model` 的条件是 `model is not None`，但缓存命中、`rate_limited`、`missing_category`、`no_key` 这些请求只要带了 key，也会把 `model` 写进行里（模型名是配置项，不是「调用了」的证据）。于是「配置了模型」被当成了「调用了模型」。
+
+**修法**：
+
+1. `by_model` 加 `attempts > 0`：只统计真的发起了模型调用的请求。现在 `by_model` 的合计 == `llm_success`。
+2. 新增 `model_latency_ms`（avg/p50/p95），只统计 `attempts > 0` 的行——**对外报延迟用这个**。原来的 `latency_ms` 保留为「请求级耗时」（含缓存命中、限流这些 2ms 的快速请求，会把平均值拉得很低，不适合当模型延迟）。两个字段的注释都写清了。
+3. `tokens` 注明只累加非空值：降级请求记 `None`，不会被当成 0。
+
+**测试**：造 3 行（缓存命中 2ms / 成功 800ms / 降级 3ms）：
+
+- `by_model = {"deepseek-chat": 1}`、`llm_success = 1`；
+- `model_latency_ms.avg = 800.0`、`latency_ms.avg = 268.3`；
+- 没有任何 `attempts>0` 的行时，`model_latency_ms` 三个值都是 `null`（不是 0）。
+
+**真实调用验证**（本地起一个假 DeepSeek，应用真走一次 HTTP 模型调用，不花额度）：
+
+```
+recommend: 200 source=llm attempts=1
+llm_success = 2   by_model = {"deepseek-chat": 2}   ← 两个数字一致
+model_latency_ms = {"avg": 836.5, "p50": 910, "p95": 910}
+latency_ms       = {"avg": 75.5,  "p50": 2,   "p95": 910}
+```
+
+对比很直观：请求级平均 75.5ms 被缓存命中拉低，模型级 836.5ms 才是要报的数字。
+
+全量 **146 passed**（144 + 2）。
+
 ### 未执行
 
 想在 8001 上跑一次真实降级链（无 key / 无效 key 各一次），但 Open-Meteo 这时又连不上（`ConnectTimeout`），`/api/recommend` 在天气那一步就 502 了，到不了 LLM。所以：

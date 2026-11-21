@@ -63,6 +63,27 @@ def resolve_llm_config(header_key: str | None) -> LLMConfig | None:
     )
 
 
+def _as_int(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return int(value)
+    return None
+
+
+def _usage_from(body: dict) -> dict[str, int | None]:
+    """取不到就记 None——0 和「没有这个数据」不是一回事。"""
+    usage = body.get("usage")
+    if not isinstance(usage, dict):
+        return {"prompt_tokens": None, "completion_tokens": None}
+    return {
+        "prompt_tokens": _as_int(usage.get("prompt_tokens")),
+        "completion_tokens": _as_int(usage.get("completion_tokens")),
+    }
+
+
 def _parse_content(content: str) -> dict:
     """模型有时会裹 ```json 围栏，这里容忍一下；仍解析不了就算 bad_json。"""
     text = (content or "").strip()
@@ -94,7 +115,8 @@ async def _post(config: LLMConfig, payload: dict) -> httpx.Response:
         raise LLMError("network", f"模型请求失败：{exc.__class__.__name__}") from exc
 
 
-async def chat_json(config: LLMConfig, system: str, user: str) -> dict:
+async def chat_json(config: LLMConfig, system: str, user: str) -> tuple[dict, dict[str, int | None]]:
+    """返回 (解析后的 JSON, usage)。usage 取不到时字段为 None。"""
     payload = {
         "model": config.model,
         "messages": [
@@ -141,4 +163,4 @@ async def chat_json(config: LLMConfig, system: str, user: str) -> dict:
         raise LLMError("truncated", "模型返回的正文为空（可能预算耗在推理上）")
 
     # 只解析 content，忽略 reasoning_content
-    return _parse_content(content)
+    return _parse_content(content), _usage_from(body)

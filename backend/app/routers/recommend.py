@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, Query, Request, Response
@@ -16,7 +17,7 @@ from .. import limits, llm_cache
 from ..db import get_db
 from ..llm import key_fingerprint, resolve_llm_config
 from ..llm_pick import pick_with_llm
-from ..models import Item
+from ..models import Item, LlmMetric, utcnow
 from ..rules import RuleItem, WeatherFacts, build_outfits, layer_of
 from ..schemas import (
     RecommendItemOut,
@@ -30,6 +31,41 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 RATE_LIMIT_NOTICE = "请求太频繁，当前展示的是规则推荐"
+
+
+def _record_metric(
+    db: Session,
+    *,
+    source: str,
+    cached: bool,
+    attempts: int,
+    fallback_reason: str | None,
+    latency_ms: int,
+    model: str | None,
+    usage: dict[str, int | None] | None,
+    is_byok: bool,
+) -> None:
+    """写指标失败绝不能影响响应；只记一条 warning。"""
+    try:
+        db.add(
+            LlmMetric(
+                created_at=utcnow(),
+                mode="llm",
+                source=source,
+                cached=cached,
+                attempts=attempts,
+                fallback_reason=fallback_reason,
+                latency_ms=latency_ms,
+                model=model,
+                tokens_prompt=(usage or {}).get("prompt_tokens"),
+                tokens_completion=(usage or {}).get("completion_tokens"),
+                is_byok=is_byok,
+            )
+        )
+        db.commit()
+    except Exception:  # noqa: BLE001 - 指标是旁路，不能拖垮主流程
+        logger.warning("llm_metric write failed", exc_info=True)
+        db.rollback()
 
 
 def _thumb(item: Item) -> str | None:
@@ -67,6 +103,7 @@ async def recommend(
     x_llm_key: str | None = Header(default=None, alias="X-LLM-Key"),
     db: Session = Depends(get_db),
 ) -> RecommendOut:
+    started = time.perf_counter()
     weather = await resolve_weather(city)
     snapshot = weather.snapshot
 
@@ -100,6 +137,9 @@ async def recommend(
     attempts = 0
     fallback_reason: str | None = None
     cached = False
+    model_name: str | None = None
+    usage: dict[str, int | None] | None = None
+    is_byok = bool((x_llm_key or "").strip())
 
     if mode == "llm":
         client_key = limits.client_key(
@@ -112,6 +152,7 @@ async def recommend(
             logger.info("llm_pick mode=llm source=rules attempts=0 fallback=no_key key=-")
             response.headers["X-RateLimit-Remaining"] = str(limits.remaining(client_key))
         else:
+            model_name = config.model
             key = llm_cache.build_key(
                 date=snapshot.date,
                 occasion=occasion,
@@ -145,6 +186,7 @@ async def recommend(
                     source = picked.source
                     attempts = picked.attempts
                     fallback_reason = picked.fallback_reason
+                    usage = picked.usage
                     if picked.source == "llm" and picked.outfit:
                         outfits = [_outfit_out(picked.outfit, picked.reason, thumbs)] + outfits[1:]
                         llm_cache.put(
@@ -158,6 +200,20 @@ async def recommend(
                     elif picked.fallback_reason:
                         # 降级结果不缓存：下次还要再试模型
                         logger.info("llm_cache skip=fallback reason=%s", picked.fallback_reason)
+
+    if mode == "llm":
+        _record_metric(
+            db,
+            source=source,
+            cached=cached,
+            # 命中缓存的那次没有真的调模型
+            attempts=0 if cached else attempts,
+            fallback_reason=fallback_reason,
+            latency_ms=int((time.perf_counter() - started) * 1000),
+            model=model_name,
+            usage=usage,
+            is_byok=is_byok,
+        )
 
     return RecommendOut(
         date=snapshot.date,

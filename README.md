@@ -90,6 +90,7 @@ python -m alembic upgrade head
 | GET | `/api/recommend?occasion=casual&city=杭州&mode=llm` | 规则候选：用天气 + 衣橱组 3 套搭配。`mode=rules`（默认）纯规则；`mode=llm` 时从规则候选里挑一套替换第一套，需要 `X-LLM-Key` 请求头或 `EW_LLM_KEY` 环境变量。模型成功结果缓存 30 分钟（`cached=true`）；按 IP 限流 10 次/分钟，超限返回 `source=rules` + `rate_limited`，永远 200 |
 | POST | `/api/outfits` | 保存一套「今天穿这套」：`{item_ids, weather?, note?}` → 写 `outfits` + `outfit_items`（layer 由品类推导）。同一套重复提交会生成新记录，不去重 |
 | GET | `/api/outfits?limit=20` | 最近保存的搭配，带每套的 item_ids |
+| GET | `/api/metrics?days=7` | 模型调用指标：调用量、成功率、缓存命中、降级原因分布、按模型分布、token 消耗、延迟 p50/p95、BYOK vs 服务端 key |
 
 图片两阶段的约定：上传成功不等于图已入库；只有单品保存成功才会搬出 tmp。启动时会清空 `media/tmp/`，所以半途而废的上传不会留下孤儿图。
 

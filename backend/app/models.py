@@ -109,3 +109,24 @@ class OutfitItem(Base):
     layer: Mapped[str | None] = mapped_column(String(8))  # inner / mid / outer
 
     outfit: Mapped[Outfit] = relationship(back_populates="items")
+
+
+class LlmMetric(Base):
+    """一次推荐请求的指标。只记 mode=llm 的请求。"""
+
+    __tablename__ = "llm_metrics"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[str] = mapped_column(
+        String(32), default=utcnow, nullable=False, index=True
+    )
+    mode: Mapped[str | None] = mapped_column(String(8))  # rules / llm
+    source: Mapped[str | None] = mapped_column(String(8))  # llm / rules
+    cached: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    fallback_reason: Mapped[str | None] = mapped_column(String(24))
+    latency_ms: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    model: Mapped[str | None] = mapped_column(String(48))
+    tokens_prompt: Mapped[int | None] = mapped_column(Integer)
+    tokens_completion: Mapped[int | None] = mapped_column(Integer)
+    is_byok: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

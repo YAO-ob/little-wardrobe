@@ -84,7 +84,10 @@ class FakeClient:
 def reply(content: dict | str, finish_reason: str = "stop") -> FakeResponse:
     text = content if isinstance(content, str) else json.dumps(content)
     return FakeResponse(
-        {"choices": [{"message": {"content": text}, "finish_reason": finish_reason}]}
+        {
+            "choices": [{"message": {"content": text}, "finish_reason": finish_reason}],
+            "usage": {"prompt_tokens": 82, "completion_tokens": 15},
+        }
     )
 
 
@@ -198,7 +201,9 @@ async def test_chat_json_ignores_reasoning_content():
             }
         )
     ]
-    assert await chat_json(CONFIG, "s", "u") == {"item_ids": [1, 2, 3]}
+    data, usage = await chat_json(CONFIG, "s", "u")
+    assert data == {"item_ids": [1, 2, 3]}
+    assert usage == {"prompt_tokens": None, "completion_tokens": None}
 
 
 @pytest.mark.anyio
@@ -221,15 +226,26 @@ async def test_chat_json_empty_content_without_length_still_truncated():
 @pytest.mark.anyio
 async def test_chat_json_ok():
     FakeClient.chat_queue = [reply({"item_ids": [1]})]
-    data = await chat_json(CONFIG, "sys", "user")
+    data, usage = await chat_json(CONFIG, "sys", "user")
     assert data == {"item_ids": [1]}
+    assert usage == {"prompt_tokens": 82, "completion_tokens": 15}
     assert FakeClient.last_headers["Authorization"] == "Bearer sk-test-secret"
+
+
+@pytest.mark.anyio
+async def test_chat_json_usage_missing_is_none_not_zero():
+    """上游没给 usage 时记 None，不要伪造 0。"""
+    FakeClient.chat_queue = [FakeResponse({"choices": [{"message": {"content": '{"ok": 1}'}}]})]
+    data, usage = await chat_json(CONFIG, "s", "u")
+    assert data == {"ok": 1}
+    assert usage == {"prompt_tokens": None, "completion_tokens": None}
 
 
 @pytest.mark.anyio
 async def test_chat_json_strips_code_fence():
     FakeClient.chat_queue = [reply('```json\n{"item_ids": [1, 2, 3]}\n```')]
-    assert await chat_json(CONFIG, "s", "u") == {"item_ids": [1, 2, 3]}
+    data, _usage = await chat_json(CONFIG, "s", "u")
+    assert data == {"item_ids": [1, 2, 3]}
 
 
 @pytest.mark.anyio

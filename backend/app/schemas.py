@@ -183,6 +183,43 @@ class OutfitListOut(BaseModel):
     outfits: list[OutfitOut]
 
 
+class TokensOut(BaseModel):
+    prompt: int = 0
+    completion: int = 0
+
+
+class LatencyOut(BaseModel):
+    avg: float | None = None
+    p50: int | None = None
+    p95: int | None = None
+
+
+class MetricsOut(BaseModel):
+    days: int
+    total_calls: int = Field(description="窗口内 mode=llm 的请求数")
+    llm_success: int = Field(description="真实模型调用成功（source=llm 且未命中缓存）")
+    cache_hits: int = Field(description="命中推荐缓存的请求数")
+    fallbacks: int = Field(description="退化成规则结果的请求数")
+    fallback_by_reason: dict[str, int] = Field(default_factory=dict)
+    by_model: dict[str, int] = Field(
+        description="按模型统计的**模型调用次数**（只算 attempts>0；缓存命中/限流不计）"
+    )
+    tokens: TokensOut = Field(
+        default_factory=TokensOut,
+        description="只累加非空值：降级请求的 token 记 None，不会被当成 0",
+    )
+    latency_ms: LatencyOut = Field(
+        default_factory=LatencyOut,
+        description="请求级耗时（含缓存命中、限流、无 key 这些很快的请求）",
+    )
+    model_latency_ms: LatencyOut = Field(
+        default_factory=LatencyOut,
+        description="真实模型调用耗时（只算 attempts>0）。对外报延迟用这个",
+    )
+    byok_calls: int = Field(description="key 来自请求头 X-LLM-Key 的次数")
+    server_key_calls: int = Field(description="key 来自环境变量（或无 key）的次数")
+
+
 def parse_season(raw: str | None) -> list[str]:
     if not raw:
         return []
