@@ -111,6 +111,17 @@ class OutfitItem(Base):
     outfit: Mapped[Outfit] = relationship(back_populates="items")
 
 
+class WeatherSnapshotRow(Base):
+    """最后一次成功的天气快照：上游挂了就拿它兜底，重启也不丢。"""
+
+    __tablename__ = "weather_snapshots"
+
+    city_name: Mapped[str] = mapped_column(String(32), primary_key=True)
+    observed_at: Mapped[str] = mapped_column(String(32), nullable=False)  # 数据对应的日期
+    fetched_at: Mapped[str] = mapped_column(String(32), nullable=False)  # 抓取时刻（ISO）
+    payload: Mapped[str] = mapped_column(Text, nullable=False)  # WeatherSnapshot 的 JSON
+
+
 class LlmMetric(Base):
     """一次推荐请求的指标。只记 mode=llm 的请求。"""
 

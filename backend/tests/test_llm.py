@@ -7,8 +7,11 @@ import logging
 
 import httpx
 import pytest
+from sqlalchemy import delete
 
 from app import limits, llm, llm_cache, llm_pick, weather
+from app.db import SessionLocal
+from app.models import WeatherSnapshotRow
 from app.llm import LLMConfig, LLMError, chat_json, key_fingerprint, resolve_llm_config
 from app.llm_pick import PickResult, build_pool, validate_selection
 from app.rules import RuleItem, WeatherFacts
@@ -112,6 +115,10 @@ def fake_http(monkeypatch):
     monkeypatch.delenv("EW_LLM_RATE_LIMIT_PER_MIN", raising=False)
     llm_cache.clear()
     limits.clear()
+    weather.clear_cache()
+    with SessionLocal() as db:
+        db.execute(delete(WeatherSnapshotRow))
+        db.commit()
     yield FakeClient
 
 

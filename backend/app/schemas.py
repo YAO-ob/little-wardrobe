@@ -105,6 +105,10 @@ class WeatherOut(BaseModel):
     uv: float = Field(description="当日最大 UV 指数，无量纲")
     weather_code: int = Field(description="WMO 天气码（取 best_match 模型，CMA 不提供）")
     weather_text: str = Field(description="天气码的中文描述，如「晴」「阵雨」；未知码返回「未知」")
+    observed_at: str = Field(default="", description="这条数据对应的日期，YYYY-MM-DD")
+    fetched_at: str = Field(
+        default="", description="抓取时刻（ISO，含时区）；stale 时前端用它算「几小时前」"
+    )
     cached: bool = Field(
         description="true = 命中进程内缓存（按 城市坐标+日期 缓存 2 小时）"
     )

@@ -6,9 +6,12 @@ import logging
 
 import httpx
 import pytest
+from sqlalchemy import delete
 
 from app import weather
 from app.data.cities import CITIES, City
+from app.db import SessionLocal
+from app.models import WeatherSnapshotRow
 
 # 上游返回样例：真实的双模型响应（2026-11-21 杭州实测）。
 # 坐标故意与请求值不同（Open-Meteo 会把坐标吸附到网格），
@@ -94,6 +97,10 @@ def fake_http(monkeypatch):
     monkeypatch.setattr(weather.httpx, "AsyncClient", FakeClient)
     # 重试间隔归零，测试不要真的睡
     monkeypatch.setattr(weather, "RETRY_DELAY_SECONDS", 0)
+    # 清掉落盘快照，否则「无缓存 → 502」的用例会被上一条测试写下的快照兜住
+    with SessionLocal() as db:
+        db.execute(delete(WeatherSnapshotRow))
+        db.commit()
     yield FakeClient
     weather.clear_cache()
 
@@ -115,6 +122,8 @@ def test_weather_fields_and_types(client):
         "uv",
         "weather_code",
         "weather_text",
+        "observed_at",
+        "fetched_at",
         "cached",
         "stale",
     }

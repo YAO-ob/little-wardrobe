@@ -78,6 +78,8 @@ export interface Weather {
   uv: number
   weather_code: number
   weather_text: string
+  observed_at?: string
+  fetched_at?: string | null
   cached: boolean
   stale: boolean
 }

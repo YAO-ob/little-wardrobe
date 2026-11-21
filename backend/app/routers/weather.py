@@ -42,6 +42,8 @@ def weather_out(result: WeatherResult) -> WeatherOut:
         uv=snap.uv,
         weather_code=snap.weather_code,
         weather_text=weather_text(snap.weather_code),
+        observed_at=result.observed_at or snap.date,
+        fetched_at=result.fetched_at,
         cached=result.cached,
         stale=result.stale,
     )

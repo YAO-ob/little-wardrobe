@@ -907,4 +907,54 @@ latency_ms       = {"avg": 75.5,  "p50": 2,   "p95": 910}
 | 产物 | 含「页面出错了」「重新加载」；`CapturePage` 里已无裸 `crypto.randomUUID` |
 | 手机实机 | **未执行**，需要你验 |
 
+## 32. W5d：天气快照落盘，重启也能降级（2026-11-21）
+
+### 为什么必须落盘
+
+Open-Meteo 在本机一天内实测三次 TLS 握手超时。之前 `stale=true` 只活在进程内存里：上游一挂，`/api/recommend` 就 502 整页不可用；进程一重启，连内存里的旧数据也没了。
+
+### 表与写入
+
+- `weather_snapshots`（迁移 `eac269a89576`）：`city_name` 主键 / `observed_at`（数据对应日期）/ `fetched_at`（抓取时刻 ISO）/ `payload`（`WeatherSnapshot` 的 JSON）。
+- 每次**成功**取数后 upsert 一行（同城覆盖），写库包在 try/except 里，失败只 warning——缓存落盘是旁路，不能影响响应。
+
+### 三级降级
+
+| 级别 | 条件 | 结果 |
+|---|---|---|
+| 1 | 进程内缓存新鲜（<2h） | `cached=true, stale=false` |
+| 2 | 进程内缓存过期 | `cached=true, stale=true` |
+| 3 | **DB 里的上次快照** | `cached=true, stale=true`，`observed_at`/`fetched_at` 用快照里的 |
+| — | 三级都空 | 502 |
+
+`WeatherResult` 与 `WeatherOut` 都加了 `observed_at` / `fetched_at`；前端在 `stale=true` 时显示「⚠ 天气取自 X 小时前的缓存」，不足 1 小时显示「不到 1 小时前」，时间算不出来时退化显示「较早的缓存」。
+
+### 可测性
+
+`API_URL` 常量改成 `api_url()` 函数，读 `EW_WEATHER_URL`（默认 `https://api.open-meteo.com`）。这样能把上游指到不可达地址，真实触发降级，不用等它抽风。
+
+### 验证（真实 HTTP，非 mock）
+
+```
+a) normal:            200  stale=False  | weather_snapshots 0 -> 1
+b) upstream down:     200  stale=True   observed_at=2026-11-21 fetched_at=2026-11-21T15:34:13+00:00
+   recommend:         200  outfits=3
+c) clear memory:      200  stale=True      ← 模拟重启，靠 DB
+d) delete row + down: 502
+```
+
+单测 7 条（`test_weather_persist.py`）：成功写行、同城覆盖不新增、上游挂读 DB、无快照 502、推荐接口也能用快照、写库失败不影响返回、`EW_WEATHER_URL` 生效。
+
+后端 **156 passed**（149 + 7），前端 **50 passed**（47 + 3）。
+
+### 顺带的测试修正
+
+落盘让「上游挂 + 无缓存 → 502」这类旧用例被上一条测试写下的快照兜住了。`test_weather.py` 与 `test_llm.py` 的 autouse fixture 现在每个用例前清空 `weather_snapshots`。
+
+### 局限
+
+- 只有「最后一次成功」，没有历史；同城只存一行。
+- 没有过期上限：三个月前的快照也会被当成 stale 返回（前端会显示「N 小时前」，足够暴露问题）。
+- 不做多城市清理、不做告警（按范围）。
+
 

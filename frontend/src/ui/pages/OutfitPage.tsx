@@ -4,6 +4,7 @@ import { getRecommend, saveOutfit } from '../../core/api'
 import { CATEGORIES, CATEGORY_LABEL, OCCASIONS } from '../../core/labels'
 import { CITIES, type CityName } from '../../core/cities'
 import { badgeFor, maskKey } from '../../core/recommendBadge'
+import { weatherAgeText } from '../../core/weatherAge'
 import type { Category, Occasion, RecommendOutfit } from '../../core/types'
 import { getLlmKey, setLlmKey, clearLlmKey } from '../../adapters/llmKey'
 import { getCity, setCity } from '../../adapters/city'
@@ -220,7 +221,7 @@ export default function OutfitPage() {
             </p>
             {data.weather.stale && (
               <p className="mt-1 text-[11px] text-amber-600">
-                天气可能不是最新（上游暂时不可用）
+                ⚠ 天气取自 {weatherAgeText(data.weather.fetched_at)}的缓存
               </p>
             )}
             <p className="mt-1 text-right text-[10px] leading-none text-black/25">

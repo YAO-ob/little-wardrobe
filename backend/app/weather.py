@@ -9,10 +9,12 @@ Open-Meteo 会把坐标吸附到网格（传 30.2741 可能返回 30.263618）�
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import os
 import time
-from dataclasses import dataclass
-from datetime import datetime
+from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -21,11 +23,17 @@ from .data.cities import City, find_city
 
 logger = logging.getLogger(__name__)
 
-API_URL = "https://api.open-meteo.com/v1/forecast"
+DEFAULT_BASE_URL = "https://api.open-meteo.com"
 TIMEOUT_SECONDS = 5.0
 # TLS 握手偶发超时：重试一次，间隔半秒
 RETRY_DELAY_SECONDS = 0.5
 CACHE_TTL_SECONDS = 2 * 60 * 60  # 2 小时，写死
+
+
+def api_url() -> str:
+    """上游地址可配，便于把 EW_WEATHER_URL 指到不可达地址做降级验收。"""
+    base = os.environ.get("EW_WEATHER_URL", DEFAULT_BASE_URL).rstrip("/")
+    return f"{base}/v1/forecast"
 
 # 双模型取数：CMA（中国气象局）更贴合国内实况，但不提供降水概率和 UV，
 # 所以温度类走 CMA、概率/UV/天气码走 best_match，缺字段再互相回退。
@@ -102,14 +110,20 @@ class WeatherResult:
     snapshot: WeatherSnapshot
     cached: bool
     stale: bool
+    observed_at: str = ""  # 数据对应的日期（YYYY-MM-DD）
+    fetched_at: str = ""  # 抓取时刻（ISO，含时区）
 
 
-# key = (lat, lon, date) -> (写入时间, 快照)
-_cache: dict[tuple[float, float, str], tuple[float, WeatherSnapshot]] = {}
+# key = (lat, lon, date) -> (写入时的 monotonic, 抓取时刻 ISO, 快照)
+_cache: dict[tuple[float, float, str], tuple[float, str, WeatherSnapshot]] = {}
 
 
 def clear_cache() -> None:
     _cache.clear()
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def cache_key(city: City, date: str) -> tuple[float, float, str]:
@@ -181,7 +195,7 @@ def _parse(city: City, date: str, payload: dict) -> WeatherSnapshot:
 
 async def _fetch_once(city: City) -> httpx.Response:
     async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
-        return await client.get(API_URL, params=_params(city))
+        return await client.get(api_url(), params=_params(city))
 
 
 async def fetch_daily(city: City, date: str) -> WeatherSnapshot:
@@ -218,20 +232,64 @@ async def fetch_daily(city: City, date: str) -> WeatherSnapshot:
     return _parse(city, date, payload)
 
 
-def _fresh(key: tuple[float, float, str], now: float) -> WeatherSnapshot | None:
+def _fresh(key: tuple[float, float, str], now: float) -> tuple[WeatherSnapshot, str] | None:
     hit = _cache.get(key)
     if hit is None:
         return None
-    stored_at, snapshot = hit
+    stored_at, fetched_at, snapshot = hit
     if now - stored_at > CACHE_TTL_SECONDS:
         return None
-    return snapshot
+    return snapshot, fetched_at
 
 
-def _last_success(key: tuple[float, float, str]) -> WeatherSnapshot | None:
+def _last_success(key: tuple[float, float, str]) -> tuple[WeatherSnapshot, str] | None:
     """降级用：过期了也要能拿出来。"""
     hit = _cache.get(key)
-    return hit[1] if hit else None
+    return (hit[2], hit[1]) if hit else None
+
+
+def _save_snapshot(city: City, snapshot: WeatherSnapshot) -> None:
+    """落盘最后一次成功的结果；写库失败只 warning，不影响线上返回。"""
+    try:
+        from .db import SessionLocal
+        from .models import WeatherSnapshotRow
+
+        payload = json.dumps(asdict(snapshot), ensure_ascii=False)
+        with SessionLocal() as db:
+            row = db.get(WeatherSnapshotRow, city.name)
+            if row is None:
+                db.add(
+                    WeatherSnapshotRow(
+                        city_name=city.name,
+                        observed_at=snapshot.date,
+                        fetched_at=now_iso(),
+                        payload=payload,
+                    )
+                )
+            else:
+                row.observed_at = snapshot.date
+                row.fetched_at = now_iso()
+                row.payload = payload
+            db.commit()
+    except Exception:  # noqa: BLE001 - 缓存落盘是旁路
+        logger.warning("weather snapshot write failed", exc_info=True)
+
+
+def _load_snapshot(city: City) -> tuple[WeatherSnapshot, str] | None:
+    """上游挂了、内存也没了（比如刚重启）时的最后一道兜底。"""
+    try:
+        from .db import SessionLocal
+        from .models import WeatherSnapshotRow
+
+        with SessionLocal() as db:
+            row = db.get(WeatherSnapshotRow, city.name)
+            if row is None:
+                return None
+            data = json.loads(row.payload)
+            return WeatherSnapshot(**data), row.fetched_at
+    except Exception:  # noqa: BLE001
+        logger.warning("weather snapshot read failed", exc_info=True)
+        return None
 
 
 async def get_weather(city_name: str | None) -> WeatherResult:
@@ -245,24 +303,42 @@ async def get_weather(city_name: str | None) -> WeatherResult:
     started = time.perf_counter()
     fresh = _fresh(key, time.monotonic())
     if fresh is not None:
+        snapshot, fetched_at = fresh
         logger.info(
             "weather city=%s date=%s cache=hit elapsed_ms=%.0f",
             city.name,
             date,
             (time.perf_counter() - started) * 1000,
         )
-        return WeatherResult(fresh, cached=True, stale=False)
+        return WeatherResult(snapshot, cached=True, stale=False, observed_at=snapshot.date, fetched_at=fetched_at)
 
     try:
         snapshot = await fetch_daily(city, date)
     except UpstreamError:
-        last = _last_success(key)
         elapsed = (time.perf_counter() - started) * 1000
+
+        # 第二级：进程内过期缓存
+        last = _last_success(key)
         if last is not None:
+            snapshot, fetched_at = last
             logger.warning(
                 "weather city=%s date=%s cache=stale elapsed_ms=%.0f", city.name, date, elapsed
             )
-            return WeatherResult(last, cached=True, stale=True)
+            return WeatherResult(
+                snapshot, cached=True, stale=True, observed_at=snapshot.date, fetched_at=fetched_at
+            )
+
+        # 第三级：DB 里的上次快照（重启后内存是空的，靠它）
+        saved = _load_snapshot(city)
+        if saved is not None:
+            snapshot, fetched_at = saved
+            logger.warning(
+                "weather city=%s date=%s cache=db_stale elapsed_ms=%.0f", city.name, date, elapsed
+            )
+            return WeatherResult(
+                snapshot, cached=True, stale=True, observed_at=snapshot.date, fetched_at=fetched_at
+            )
+
         logger.error(
             "weather city=%s date=%s cache=miss elapsed_ms=%.0f upstream=failed",
             city.name,
@@ -271,11 +347,13 @@ async def get_weather(city_name: str | None) -> WeatherResult:
         )
         raise
 
-    _cache[key] = (time.monotonic(), snapshot)
+    fetched_at = now_iso()
+    _cache[key] = (time.monotonic(), fetched_at, snapshot)
+    _save_snapshot(city, snapshot)
     logger.info(
         "weather city=%s date=%s cache=miss elapsed_ms=%.0f",
         city.name,
         date,
         (time.perf_counter() - started) * 1000,
     )
-    return WeatherResult(snapshot, cached=False, stale=False)
+    return WeatherResult(snapshot, cached=False, stale=False, observed_at=snapshot.date, fetched_at=fetched_at)

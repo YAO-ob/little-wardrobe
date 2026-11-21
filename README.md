@@ -134,6 +134,7 @@ python scripts/seed_30.py     # 生成 30 件演示单品（色块图，用于�
 | `EW_LLM_MAX_TOKENS` | `800` | 单次生成上限（推理模型要给够预算） |
 | `EW_LLM_CACHE_TTL` | `1800` | 推荐结果缓存秒数 |
 | `EW_LLM_RATE_LIMIT_PER_MIN` | `10` | 每个客户端每分钟可调模型的次数 |
+| `EW_WEATHER_URL` | `https://api.open-meteo.com` | 天气上游地址；指到不可达地址可验证降级 |
 
 **都不设置也能跑，只是没有 AI 推荐。**
 
