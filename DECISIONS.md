@@ -435,6 +435,38 @@ DIFF_SPREAD=9      DIFF_FEELS_MIN=18
 - 完全没用降水/紫外线（只按体感配），雨天该不该换鞋还没规则。
 - 没落库、没接模型（N3）、`wear_log` 不参与打分（按范围）。
 
+## 23. N3：搭配页 + 保存搭配（2026-11-21）
+
+### 后端契约
+
+- `POST /api/outfits`：`{item_ids, weather?, note?}`。校验 item_ids 非空、每个都存在于未删除的单品，否则 422；单件重复会被折叠（不是报错），因为 `outfit_items` 有 `UNIQUE(outfit_id, item_id)`。
+- `worn_on` = `weather.date`，没传天气就用服务器当天；`weather_json` 存整份快照（含 `weather_text`），以后能解释「当时为什么这么配」。
+- `layer` 用 `rules.layer_of(category)` 填：top/dress→inner、outer→outer、其余 null。
+- **同一套重复提交不去重**：那是「今天又穿了这套」，是合法记录。
+- `GET /api/outfits?limit=20`：带 `item_ids`，够当前验证用，历史页留给以后。
+- 不做编辑 / 删除 / 撤销（按范围）。
+
+### 前端
+
+- 第三个 tab「搭配」：天气条（城市/文案/温度/体感/降水/UV）+ 四场合切换 + 三张卡片（缩略图横排 + 理由 + 「就穿这套」）。
+- 点按钮 → `POST /api/outfits` → toast「已记下今天的搭配」→ 按钮变「已保存」并禁用，防连点。
+- 加载失败（400/502）显示错误文案 + 重试按钮，不白屏。
+- 所有请求走 `core/api.ts`（`getRecommend` / `saveOutfit`），组件里没有裸 `fetch`。
+
+### 验收（已执行，走真实接口 + 真实库）
+
+| 项 | 结果 |
+|---|---|
+| a) 推荐数据 | `occasion=casual` → 3 套，天气「晴 6.8–14.6℃」，每套 5 件且 5/5 有缩略图 |
+| b) 保存落库 | `outfits 0→1`、`outfit_items 0→5`；layer 为 inner/None/None/outer/None；`wear_log` 查到 5 行（item_id 1/5/16/17/19） |
+| c) 切 work | casual ids `[1,5,16,17,19,34,57]` vs work ids `[13,18,28,32,33,34]`，内容确实换了一批 |
+| 后端测试 | 81 passed（74 + 搭配 7） |
+| 前端 | 23 passed / typecheck 0 / build 0（271KB，gzip 84KB） |
+
+**未执行**：浏览器里真点「就穿这套」。沙箱起不了浏览器，所以按「前端会发的请求」原样发了一遍 HTTP 并查了库——按钮禁用与 toast 属于纯 UI 行为，仍需你点一次确认。
+
+验收期间真的落了一条记录：`outfits.id=1`、`worn_on=2026-11-21`、5 件单品、note「规则推荐 · casual」。不想留可以直接 SQL 删，或者告诉我处理。
+
 ### 顺带发现的环境问题
 
 本机 8000 端口上跑的是**修正前**的进程（打 `city=杭州` 还回 `502 天气服务返回 HTTP 400`，和你看到的现象一致）。它由本会话之外的终端启动，当前沙箱会话对它 `Stop-Process`/`taskkill` 都返回「拒绝访问」，杀不掉，所以本轮真上游验证改在 **8001** 端口做。

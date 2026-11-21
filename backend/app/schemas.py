@@ -139,6 +139,40 @@ class RecommendOut(BaseModel):
     )
 
 
+class WeatherSnapshotIn(BaseModel):
+    """前端回传的天气快照，只用于存进 outfits.weather_json。"""
+
+    date: str
+    t_min: float
+    t_max: float
+    feels_min: float
+    feels_max: float
+    precip_prob: float
+    wind: float
+    uv: float
+    weather_code: int
+    weather_text: str
+
+
+class OutfitCreate(BaseModel):
+    item_ids: list[int] = Field(min_length=1, description="这套包含的单品 id，不能为空")
+    weather: WeatherSnapshotIn | None = Field(
+        default=None, description="天气快照；不传则 worn_on 用今天"
+    )
+    note: str | None = None
+
+
+class OutfitOut(BaseModel):
+    id: int
+    worn_on: str
+    item_ids: list[int]
+
+
+class OutfitListOut(BaseModel):
+    total: int
+    outfits: list[OutfitOut]
+
+
 def parse_season(raw: str | None) -> list[str]:
     if not raw:
         return []

@@ -1,4 +1,13 @@
-import type { Category, ItemFilter, ItemList, Occasion, Warmth } from './types'
+import type {
+  Category,
+  ItemFilter,
+  ItemList,
+  Occasion,
+  RecommendResult,
+  SavedOutfit,
+  Warmth,
+  Weather,
+} from './types'
 
 const BASE = '/api'
 
@@ -13,6 +22,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
       const body = (await res.json()) as { detail?: unknown }
       if (typeof body.detail === 'string') detail = body.detail
       else if (Array.isArray(body.detail)) detail = '表单校验未通过'
+      else if (body.detail && typeof body.detail === 'object' && 'message' in body.detail) {
+        detail = String((body.detail as { message: unknown }).message)
+      }
     } catch {
       /* 非 JSON 响应，保留默认文案 */
     }
@@ -46,4 +58,45 @@ export function createItem(payload: {
 
 export function deleteItem(id: number): Promise<void> {
   return request(`/items/${id}`, { method: 'DELETE' })
+}
+
+export function getRecommend(
+  params: { city?: string; occasion?: Occasion } = {},
+): Promise<RecommendResult> {
+  const query = new URLSearchParams()
+  if (params.city) query.set('city', params.city)
+  if (params.occasion) query.set('occasion', params.occasion)
+  const suffix = query.toString()
+  return request<RecommendResult>(`/recommend${suffix ? `?${suffix}` : ''}`)
+}
+
+/** 只回传后端需要的快照字段，不要把整个 Weather 塞进去。 */
+function weatherPayload(weather: Weather) {
+  return {
+    date: weather.date,
+    t_min: weather.t_min,
+    t_max: weather.t_max,
+    feels_min: weather.feels_min,
+    feels_max: weather.feels_max,
+    precip_prob: weather.precip_prob,
+    wind: weather.wind,
+    uv: weather.uv,
+    weather_code: weather.weather_code,
+    weather_text: weather.weather_text,
+  }
+}
+
+export function saveOutfit(payload: {
+  item_ids: number[]
+  weather: Weather | null
+  note?: string
+}): Promise<SavedOutfit> {
+  return request('/outfits', {
+    method: 'POST',
+    body: JSON.stringify({
+      item_ids: payload.item_ids,
+      weather: payload.weather ? weatherPayload(payload.weather) : null,
+      note: payload.note,
+    }),
+  })
 }

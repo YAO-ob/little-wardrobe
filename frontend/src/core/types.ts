@@ -65,3 +65,45 @@ export interface ItemFilter {
   limit?: number
   offset?: number
 }
+
+export interface Weather {
+  city: string
+  date: string
+  t_min: number
+  t_max: number
+  feels_min: number
+  feels_max: number
+  precip_prob: number
+  wind: number
+  uv: number
+  weather_code: number
+  weather_text: string
+  cached: boolean
+  stale: boolean
+}
+
+export interface RecommendItem {
+  id: number
+  category: string
+  warmth: number | null
+  layer: string | null
+  thumb_url: string | null
+}
+
+export interface RecommendOutfit {
+  items: RecommendItem[]
+  reason: string
+}
+
+export interface RecommendResult {
+  date: string
+  weather: Weather
+  outfits: RecommendOutfit[]
+  notice: string | null
+}
+
+export interface SavedOutfit {
+  id: number
+  worn_on: string
+  item_ids: number[]
+}

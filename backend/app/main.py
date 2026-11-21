@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .config import get_settings
 from .db import run_migrations
-from .routers import images, items, recommend, weather
+from .routers import images, items, outfits, recommend, weather
 
 # Windows 注册表里常常没有 webp 映射，显式补上
 mimetypes.add_type("image/webp", ".webp")
@@ -44,6 +44,7 @@ app.include_router(items.router, prefix="/api/items", tags=["items"])
 app.include_router(images.router, prefix="/api/images", tags=["images"])
 app.include_router(weather.router, prefix="/api/weather", tags=["weather"])
 app.include_router(recommend.router, prefix="/api/recommend", tags=["recommend"])
+app.include_router(outfits.router, prefix="/api/outfits", tags=["outfits"])
 app.mount("/media", StaticFiles(directory=settings.media_dir, check_dir=False), name="media")
 
 
