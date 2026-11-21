@@ -48,8 +48,10 @@ python scripts\pipx.py install --target backend\.pyenv -r backend\requirements-d
 渲染顺序是「选图 → 上传拿 id → 建单品时把 image_ids 挂上去」，所以图片记录要先于单品存在。
 `images.item_id` 因此可空；`POST /api/items` 只接受 `item_id IS NULL` 的图，防止一张图挂两件衣服。
 
-**代价**：如果用户传了图但没保存单品，会留下孤儿图。目前没有清理任务。
+**代价**：如果用户传了图但没保存单品，会留下孤儿图。目前没有清理任务（`scripts/clean_media.py` 只能清不再被引用的文件，孤儿图仍挂在 `images` 表上）。
 **什么时候补**：W2 之前加一个「启动时删掉 24 小时前的孤儿图」的小任务就够，别上定时框架。
+
+**修订（W7a，2026-11-22）**：原来写的是「不做图片识别」。改成「**只做录入时的品类/厚薄预填**」——这两个是极速录入里最明显、也最浪费时间的两步，识别它们直接服务主流程。颜色、材质、品牌、精细子分类**仍然不做**，那属于「看起来酷但不影响核心动作」的范畴。
 
 ## 6. 图片管线：重建图像来剥元数据
 
@@ -1021,5 +1023,65 @@ d) delete row + down: 502
 | 前端 | **56 passed**（50 + 6） / typecheck 0 / build 0 |
 | 真实接口 | `GET /api/items/{id}` 返回全部可编辑字段，`image.url` 是 `_1024.webp` 那档 |
 | 浏览器点击（a–e） | **未执行**，需要你点 |
+
+## 35. W6a：底部标签栏 + 移动端触控（2026-11-22）
+
+- 顶部只留标题，导航改成底部固定标签栏：三项（📷 录入 / 🧺 图库 / 👕 搭配），图标在上文案在下，每项 `min-h-14`（56px）；选中项文字加粗 + 顶部 2px 指示线。
+- 底栏用 `fixed inset-x-0 bottom-0 mx-auto max-w-xl`：手机上贴底、桌面下跟内容一起居中，不铺满整屏。
+- 安全区：`pb-[env(safe-area-inset-bottom)]`，`index.html` 的 `viewport-fit=cover` 本来就有。
+- `main` 加 `pb-24`（96px），最后一张卡片不会被底栏盖住；Toast 也上移到 `bottom-24`，否则会被底栏挡。
+- 触控：图库删除按钮视觉仍是小胶囊，但用 `after:-inset-1.5` 把热区撑到约 36×44；`body { overflow-x: hidden }` 兜底，手机上不会左右滑。
+- 录入页底部那排按钮改 `flex-wrap`，375px 下会换行而不是横向溢出。
+
+**没做的**：暗色模式、字体缩放、动效（按范围）。视觉验收（375×667 / 390×844 / 桌面居中）需要在浏览器里点，agent 无浏览器。
+
+## 36. W7a：录入预填（多模态 + 置信度弃答）（2026-11-22）
+
+### 只做两件事
+
+`POST /api/classify`（body `{image_id}`）只判断**品类**和**厚薄**，prompt 里明说不判断颜色/材质/品牌。理由见第 5 节的修订：这两步最耗时且最明显。
+
+### 客户端
+
+`llm.chat_json_with_image()` 与 `chat_json()` 共用 `_read_completion()`（重试去 `response_format`、429/5xx/截断/空正文/JSON 围栏都在那一处），差别只是 `content` 用数组形式 + `data:<mime>;base64,...`。
+
+### 图片预处理
+
+优先取 1024 展示图，用 Pillow `convert("RGB")` + `thumbnail(512)` + JPEG q80 再 base64。**不把原图发出去**：原图 3–5MB 会烧掉大量 token，而且可能带 EXIF。
+
+### 闭合校验与弃答
+
+| 情况 | reason | 返回 |
+|---|---|---|
+| 没有 key | `no_key` | 200，不调上游 |
+| 品类不在六选一 / 厚薄不在 1-3 | `invalid_label` | 200，category/warmth 置 null |
+| confidence 不是 0–1 的数字 | `invalid_confidence` | 200 |
+| confidence < 阈值（默认 0.6，`EW_CLASSIFY_MIN_CONFIDENCE`） | `low_confidence` | 200，两个值都置 null |
+| 超时 / 429 / 非 JSON / 结构不对 / 图丢了 | `timeout` / `rate_limited` / `bad_json` / `bad_structure` / `image_missing` | 200 |
+
+**任何路径都不 500**：录入流程不该因为模型抽风而中断。
+
+### 缓存与日志
+
+- 结果按 `image_id` 缓存在进程内 dict，TTL 30 分钟；**只缓存成功结果**——失败不缓存，用户补了 key 能重试（否则 30 分钟内都被 no_key 卡住）。
+- 日志只有 `image_id / source / reason / confidence / elapsed_ms`，不记 base64、不记完整响应。
+
+### 验证
+
+| 项 | 结果 |
+|---|---|
+| 后端 | **173 passed**（165 + 8） |
+| 真实 HTTP（假上游）：无 key | 200 `no_key`，上游调用 0 次 |
+| 真实 HTTP（假上游）：带 key | 200 `{category: shoes, warmth: 2, confidence: 0.88}`，发出去的图是 `data:image/jpeg;base64,/9j/`（JPEG） |
+| 缓存 | 第二次调用上游仍只 1 次 |
+| 真实模型分类 | **未执行**：agent 环境没有 key，也不该用用户的 key |
+
+**你需要跑一次真实验收**（拿到真实置信度）：
+
+```powershell
+curl -X POST http://127.0.0.1:8000/api/classify -H "Content-Type: application/json" -H "X-LLM-Key: <你的key>" -d '{\"image_id\": 64}'
+```
+
+图片 id 64 是库里的一双鞋（`items.id=64`）。
 
 

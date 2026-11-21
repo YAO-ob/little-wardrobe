@@ -115,19 +115,10 @@ async def _post(config: LLMConfig, payload: dict) -> httpx.Response:
         raise LLMError("network", f"模型请求失败：{exc.__class__.__name__}") from exc
 
 
-async def chat_json(config: LLMConfig, system: str, user: str) -> tuple[dict, dict[str, int | None]]:
-    """返回 (解析后的 JSON, usage)。usage 取不到时字段为 None。"""
-    payload = {
-        "model": config.model,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user", "content": user},
-        ],
-        "temperature": 0,
-        "max_tokens": config.max_tokens,
-        "response_format": {"type": "json_object"},
-    }
-
+async def _read_completion(
+    config: LLMConfig, payload: dict
+) -> tuple[dict, dict[str, int | None]]:
+    """发请求并解析成 (JSON, usage)；文本与图片两条路径共用。"""
     response = await _post(config, payload)
 
     # 有的兼容实现不认 response_format；按提示词+解析兜底，重试一次去掉它
@@ -164,3 +155,48 @@ async def chat_json(config: LLMConfig, system: str, user: str) -> tuple[dict, di
 
     # 只解析 content，忽略 reasoning_content
     return _parse_content(content), _usage_from(body)
+
+
+async def chat_json(config: LLMConfig, system: str, user: str) -> tuple[dict, dict[str, int | None]]:
+    """返回 (解析后的 JSON, usage)。usage 取不到时字段为 None。"""
+    payload = {
+        "model": config.model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "temperature": 0,
+        "max_tokens": config.max_tokens,
+        "response_format": {"type": "json_object"},
+    }
+    return await _read_completion(config, payload)
+
+
+async def chat_json_with_image(
+    config: LLMConfig,
+    system: str,
+    user: str,
+    image_b64: str,
+    mime: str = "image/jpeg",
+) -> tuple[dict, dict[str, int | None]]:
+    """图文请求：content 用数组形式，图片走 data URL。"""
+    payload = {
+        "model": config.model,
+        "messages": [
+            {"role": "system", "content": system},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": user},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime};base64,{image_b64}"},
+                    },
+                ],
+            },
+        ],
+        "temperature": 0,
+        "max_tokens": config.max_tokens,
+        "response_format": {"type": "json_object"},
+    }
+    return await _read_completion(config, payload)

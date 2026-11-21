@@ -15,6 +15,9 @@ body {
   background-color: var(--color-paper);
   color: var(--color-ink);
   -webkit-tap-highlight-color: transparent;
+  /* 手机上不许左右滑。用 clip 而不是 hidden：hidden 会让 body 变成滚动容器，
+     header 的 position: sticky 就失去参照、滚动时不再吸顶。 */
+  overflow-x: clip;
 }
 
 /* 图库卡片上的删除入口：触屏常显；鼠标设备 hover 卡片或键盘聚焦时才出现。

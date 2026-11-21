@@ -184,6 +184,18 @@ class OutfitCreate(BaseModel):
     note: str | None = None
 
 
+class ClassifyIn(BaseModel):
+    image_id: int
+
+
+class ClassifyOut(BaseModel):
+    category: str | None = None
+    warmth: int | None = None
+    confidence: float | None = None
+    source: str = "none"
+    reason: str | None = None
+
+
 class OutfitItemBrief(BaseModel):
     id: int
     category: str | None = None

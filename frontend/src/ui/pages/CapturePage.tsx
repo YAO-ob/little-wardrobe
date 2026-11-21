@@ -285,12 +285,12 @@ export default function CapturePage({ onOpenGallery }: { onOpenGallery: () => vo
 
           {error && <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
 
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
             <button
               type="button"
               onClick={() => void save()}
               disabled={busy}
-              className="flex-1 rounded-xl bg-black py-3 text-sm font-medium text-white disabled:opacity-40"
+              className="min-w-[6.5rem] flex-1 rounded-xl bg-black px-3 py-3 text-sm font-medium text-white disabled:opacity-40"
             >
               {busy ? '保存中…' : `保存${saved > 0 ? `（已存 ${saved}）` : ''}`}
             </button>

@@ -15,7 +15,7 @@ export default function Toast() {
   if (!message) return null
 
   return (
-    <div className="pointer-events-none fixed inset-x-0 bottom-6 z-30 flex justify-center">
+    <div className="pointer-events-none fixed inset-x-0 bottom-24 z-30 flex justify-center">
       <p className="rounded-full bg-black/85 px-4 py-2 text-xs text-white shadow-lg">{message}</p>
     </div>
   )
