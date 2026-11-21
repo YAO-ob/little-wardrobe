@@ -24,6 +24,12 @@ API_URL = "https://api.open-meteo.com/v1/forecast"
 TIMEOUT_SECONDS = 5.0
 CACHE_TTL_SECONDS = 2 * 60 * 60  # 2 小时，写死
 
+# 双模型取数：CMA（中国气象局）更贴合国内实况，但不提供降水概率和 UV，
+# 所以温度类走 CMA、概率/UV/天气码走 best_match，缺字段再互相回退。
+MODEL_PRIMARY = "cma_grapes_global"
+MODEL_FALLBACK = "best_match"
+MODELS_PARAM = f"{MODEL_PRIMARY},{MODEL_FALLBACK}"
+
 DAILY_FIELDS = (
     "temperature_2m_max",
     "temperature_2m_min",
@@ -32,7 +38,36 @@ DAILY_FIELDS = (
     "precipitation_probability_max",
     "wind_speed_10m_max",
     "uv_index_max",
+    "weather_code",
 )
+
+# WMO 天气码 → 中文。没列到的区间一律「未知」，不要猜。
+WMO_TEXT: dict[int, str] = {
+    0: "晴",
+    1: "多云",
+    2: "多云",
+    3: "阴",
+    45: "雾",
+    48: "雾",
+}
+WMO_RANGES: tuple[tuple[int, int, str], ...] = (
+    (51, 57, "毛毛雨"),
+    (61, 67, "雨"),
+    (71, 77, "雪"),
+    (80, 82, "阵雨"),
+    (95, 99, "雷雨"),
+)
+
+
+def weather_text(code: int | None) -> str:
+    if code is None:
+        return "未知"
+    if code in WMO_TEXT:
+        return WMO_TEXT[code]
+    for low, high, text in WMO_RANGES:
+        if low <= code <= high:
+            return text
+    return "未知"
 
 
 class UnknownCity(Exception):
@@ -56,6 +91,7 @@ class WeatherSnapshot:
     precip_prob: float
     wind: float
     uv: float
+    weather_code: int
 
 
 @dataclass(frozen=True)
@@ -88,25 +124,56 @@ def _params(city: City) -> dict[str, str | float | int]:
         "daily": ",".join(DAILY_FIELDS),
         "timezone": city.timezone,
         "forecast_days": 1,
+        "models": MODELS_PARAM,
     }
 
 
-def _parse(city: City, date: str, payload: dict) -> WeatherSnapshot:
+def _series_value(daily: dict, base: str, model: str) -> float | None:
+    series = daily.get(f"{base}_{model}")
+    if not isinstance(series, list) or not series:
+        return None
+    head = series[0]
+    if head is None:
+        return None
     try:
-        daily = payload["daily"]
-        return WeatherSnapshot(
-            city=city.name,
-            date=date,
-            t_min=float(daily["temperature_2m_min"][0]),
-            t_max=float(daily["temperature_2m_max"][0]),
-            feels_min=float(daily["apparent_temperature_min"][0]),
-            feels_max=float(daily["apparent_temperature_max"][0]),
-            precip_prob=float(daily["precipitation_probability_max"][0]),
-            wind=float(daily["wind_speed_10m_max"][0]),
-            uv=float(daily["uv_index_max"][0]),
-        )
-    except (KeyError, IndexError, TypeError, ValueError) as exc:
-        raise UpstreamError("天气服务返回结构异常") from exc
+        return float(head)
+    except (TypeError, ValueError):
+        return None
+
+
+def _pick(daily: dict, base: str, preferred: str, fallback: str) -> float:
+    """先取首选模型的字段，缺失/为 null 再退回另一个模型；都没有就报错。
+
+    不静默填 0：0 是「测得是 0」，null 是「没这个数据」，两者不能混。
+    """
+    for model in (preferred, fallback):
+        value = _series_value(daily, base, model)
+        if value is not None:
+            return value
+    raise UpstreamError(f"天气服务缺少可用字段：{base}")
+
+
+def _parse(city: City, date: str, payload: dict) -> WeatherSnapshot:
+    daily = payload.get("daily")
+    if not isinstance(daily, dict):
+        raise UpstreamError("天气服务返回结构异常")
+
+    return WeatherSnapshot(
+        city=city.name,
+        date=date,
+        # 温度/体感走 CMA
+        t_min=_pick(daily, "temperature_2m_min", MODEL_PRIMARY, MODEL_FALLBACK),
+        t_max=_pick(daily, "temperature_2m_max", MODEL_PRIMARY, MODEL_FALLBACK),
+        feels_min=_pick(daily, "apparent_temperature_min", MODEL_PRIMARY, MODEL_FALLBACK),
+        feels_max=_pick(daily, "apparent_temperature_max", MODEL_PRIMARY, MODEL_FALLBACK),
+        wind=_pick(daily, "wind_speed_10m_max", MODEL_PRIMARY, MODEL_FALLBACK),
+        # 降水概率 / UV / 天气码走 best_match
+        precip_prob=_pick(
+            daily, "precipitation_probability_max", MODEL_FALLBACK, MODEL_PRIMARY
+        ),
+        uv=_pick(daily, "uv_index_max", MODEL_FALLBACK, MODEL_PRIMARY),
+        weather_code=int(_pick(daily, "weather_code", MODEL_FALLBACK, MODEL_PRIMARY)),
+    )
 
 
 async def fetch_daily(city: City, date: str) -> WeatherSnapshot:

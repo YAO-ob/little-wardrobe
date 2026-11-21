@@ -8,21 +8,34 @@ import pytest
 from app import weather
 from app.data.cities import CITIES, City
 
-# 上游返回样例。坐标故意与请求值不同（Open-Meteo 会把坐标吸附到网格），
+# 上游返回样例：真实的双模型响应（2026-11-21 杭州实测）。
+# 坐标故意与请求值不同（Open-Meteo 会把坐标吸附到网格），
 # 用来证明缓存 key 不是拿响应值算的。
+CMA = "cma_grapes_global"
+BEST = "best_match"
+
 UPSTREAM_OK = {
     "latitude": 30.2636,
-    "longitude": 120.1,
+    "longitude": 120.14051,
     "timezone": "Asia/Shanghai",
     "daily": {
         "time": ["2026-11-21"],
-        "temperature_2m_max": [21.5],
-        "temperature_2m_min": [12.3],
-        "apparent_temperature_max": [20.8],
-        "apparent_temperature_min": [10.9],
-        "precipitation_probability_max": [10],
-        "wind_speed_10m_max": [12.4],
-        "uv_index_max": [3.2],
+        f"temperature_2m_max_{CMA}": [14.6],
+        f"temperature_2m_min_{CMA}": [6.8],
+        f"apparent_temperature_max_{CMA}": [11.9],
+        f"apparent_temperature_min_{CMA}": [4.1],
+        f"precipitation_probability_max_{CMA}": [None],
+        f"wind_speed_10m_max_{CMA}": [9.7],
+        f"uv_index_max_{CMA}": [None],
+        f"weather_code_{CMA}": [0],
+        f"temperature_2m_max_{BEST}": [15.5],
+        f"temperature_2m_min_{BEST}": [3.1],
+        f"apparent_temperature_max_{BEST}": [13.2],
+        f"apparent_temperature_min_{BEST}": [0.8],
+        f"precipitation_probability_max_{BEST}": [0],
+        f"wind_speed_10m_max_{BEST}": [6.5],
+        f"uv_index_max_{BEST}": [4.45],
+        f"weather_code_{BEST}": [0],
     },
 }
 
@@ -88,6 +101,8 @@ def test_weather_fields_and_types(client):
         "precip_prob",
         "wind",
         "uv",
+        "weather_code",
+        "weather_text",
         "cached",
         "stale",
     }
@@ -100,6 +115,61 @@ def test_weather_fields_and_types(client):
     assert body["date"] == weather.today_in("Asia/Shanghai")
     assert body["cached"] is False
     assert body["stale"] is False
+
+
+def test_dual_model_picks_cma_for_temperature_and_best_for_probability(client):
+    body = client.get("/api/weather", params={"city": "杭州"}).json()
+
+    # 温度/体感来自 CMA
+    assert body["t_min"] == pytest.approx(6.8)
+    assert body["t_max"] == pytest.approx(14.6)
+    assert body["feels_min"] == pytest.approx(4.1)
+    assert body["feels_max"] == pytest.approx(11.9)
+    assert body["wind"] == pytest.approx(9.7)
+
+    # CMA 这两个字段是 null，必须落到 best_match
+    assert body["precip_prob"] == pytest.approx(0)
+    assert body["uv"] == pytest.approx(4.45)
+
+    assert body["weather_code"] == 0
+    assert body["weather_text"] == "晴"
+
+
+def test_missing_cma_temperature_falls_back_to_best_match(client, fake_http):
+    payload = {
+        **UPSTREAM_OK,
+        "daily": {
+            key: value
+            for key, value in UPSTREAM_OK["daily"].items()
+            if not key.endswith(f"_{CMA}") or "precipitation" in key or "uv_index" in key
+        },
+    }
+    fake_http.response = FakeResponse(payload=payload)
+
+    res = client.get("/api/weather", params={"city": "杭州"})
+    assert res.status_code == 200, res.text
+
+    body = res.json()
+    assert body["t_min"] == pytest.approx(3.1)
+    assert body["t_max"] == pytest.approx(15.5)
+    assert body["feels_min"] == pytest.approx(0.8)
+    assert body["feels_max"] == pytest.approx(13.2)
+
+
+def test_missing_field_in_both_models_returns_502(client, fake_http):
+    payload = {
+        **UPSTREAM_OK,
+        "daily": {
+            key: value
+            for key, value in UPSTREAM_OK["daily"].items()
+            if not key.startswith("temperature_2m_min")
+        },
+    }
+    fake_http.response = FakeResponse(payload=payload)
+
+    res = client.get("/api/weather", params={"city": "杭州"})
+    assert res.status_code == 502
+    assert res.json()["detail"]["code"] == "weather_upstream_failed"
 
 
 def test_default_city_is_hangzhou(client):
@@ -202,3 +272,58 @@ def test_upstream_params_use_city_latitude():
     assert params["timezone"] == "Asia/Shanghai"
     assert params["forecast_days"] == 1
     assert params["daily"] == ",".join(weather.DAILY_FIELDS)
+
+
+def test_params_request_both_models():
+    """参数层 golden：一次请求要两个模型，缺一个就少一半字段。"""
+    params = weather._params(CITIES["杭州"])
+    assert params["models"] == "cma_grapes_global,best_match"
+    assert "weather_code" in str(params["daily"])
+    assert "uv_index_max" in str(params["daily"])
+
+
+@pytest.mark.parametrize(
+    ("code", "text"),
+    [
+        (0, "晴"),
+        (1, "多云"),
+        (3, "阴"),
+        (45, "雾"),
+        (53, "毛毛雨"),
+        (63, "雨"),
+        (73, "雪"),
+        (81, "阵雨"),
+        (96, "雷雨"),
+        (123, "未知"),
+    ],
+)
+def test_weather_text_mapping(code, text):
+    assert weather.weather_text(code) == text
+
+
+# --- 推荐接口的契约（天气用假上游，规则本身在 test_rules.py） ---------------
+
+
+def test_recommend_endpoint_shape(client, fake_http):
+    res = client.get("/api/recommend", params={"occasion": "casual"})
+    assert res.status_code == 200, res.text
+
+    body = res.json()
+    assert set(body) == {"date", "weather", "outfits", "notice"}
+    assert body["date"] == body["weather"]["date"]
+    assert len(body["outfits"]) <= 3
+
+    for outfit in body["outfits"]:
+        assert outfit["reason"]
+        assert outfit["items"]
+        for item in outfit["items"]:
+            assert set(item) == {"id", "category", "warmth", "layer", "thumb_url"}
+
+
+def test_recommend_endpoint_propagates_weather_errors(client, fake_http):
+    fake_http.error = httpx.ConnectError("boom")
+    weather.clear_cache()
+
+    res = client.get("/api/recommend", params={"city": "杭州"})
+    assert res.status_code == 502
+    assert res.json()["detail"]["code"] == "weather_upstream_failed"

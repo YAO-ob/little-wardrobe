@@ -103,6 +103,8 @@ class WeatherOut(BaseModel):
     precip_prob: float = Field(description="当日最大降水概率，%")
     wind: float = Field(description="当日最大风速，km/h")
     uv: float = Field(description="当日最大 UV 指数，无量纲")
+    weather_code: int = Field(description="WMO 天气码（取 best_match 模型，CMA 不提供）")
+    weather_text: str = Field(description="天气码的中文描述，如「晴」「阵雨」；未知码返回「未知」")
     cached: bool = Field(
         description="true = 命中进程内缓存（按 城市坐标+日期 缓存 2 小时）"
     )
@@ -111,6 +113,29 @@ class WeatherOut(BaseModel):
             "true = 上游失败，返回的是上一次的成功结果（可能是几小时前的）；"
             "前端应提示「天气可能不是最新」。cached 同时为 true"
         )
+    )
+
+
+class RecommendItemOut(BaseModel):
+    id: int
+    category: str
+    warmth: int | None = None
+    layer: str | None = Field(default=None, description="inner / mid / outer；下装鞋配饰为 null")
+    thumb_url: str | None = Field(default=None, description="缩略图地址；没图就是 null")
+
+
+class RecommendOutfitOut(BaseModel):
+    items: list[RecommendItemOut]
+    reason: str = Field(description="一句中文理由，说明为什么这么配")
+
+
+class RecommendOut(BaseModel):
+    date: str
+    weather: WeatherOut
+    outfits: list[RecommendOutfitOut] = Field(default_factory=list)
+    notice: str | None = Field(
+        default=None,
+        description="衣橱缺品类等说明；例如「衣橱里没有下装，只能组出 1 套」",
     )
 
 

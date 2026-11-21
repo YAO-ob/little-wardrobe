@@ -59,7 +59,6 @@ scripts/manual/    需要真浏览器的手工脚本（当前有一个未验证�
 分层约束：`core/` 不 import `window` / `document` / `localStorage` / `react-dom`，保证以后迁小程序时逻辑层可复用。
 
 ## 数据库迁移
-
 启动时自动 `alembic upgrade head`，所以正常情况下不用管。新增一次改动：
 
 ```powershell
@@ -84,9 +83,21 @@ python -m alembic upgrade head
 | GET | `/api/items/{id}` | 单品详情 |
 | PATCH | `/api/items/{id}` | 局部更新（补颜色/品牌/价格等选填字段） |
 | DELETE | `/api/items/{id}` | 软删除 |
-| GET | `/api/weather?city=杭州` | 今天的日预报（Open-Meteo）。不传 city 用杭州；城市不在内置表里 → 400；上游失败有旧数据 → 200 + `stale=true`；无旧数据 → 502 |
+| GET | `/api/weather?city=杭州` | 今天的日预报。温度取 CMA（更贴合国内实况），降水概率/UV/天气码取 best_match；返回含 `weather_code` 与中文 `weather_text`。不传 city 用杭州；城市不在内置表里 → 400；上游失败有旧数据 → 200 + `stale=true`；无旧数据 → 502 |
+| GET | `/api/recommend?occasion=casual&city=杭州` | 规则候选：用天气 + 衣橱组 3 套搭配，每套带一句中文理由。缺品类时返回能组出的套数（0–3）+ `notice`，不报 500 |
 
 图片两阶段的约定：上传成功不等于图已入库；只有单品保存成功才会搬出 tmp。启动时会清空 `media/tmp/`，所以半途而废的上传不会留下孤儿图。
+
+## 推荐规则（无模型，纯函数）
+
+`backend/app/rules.py`：不查库、不发请求，输入天气事实 + 单品摘要，输出 0–3 套搭配。路由层只负责查库与拼响应。
+
+- 温度需求看**体感**不看实测：`feels_min < 5` → 厚（warmth 3）；`< 15` → 中；否则薄
+- `feels_min < 12` 需要外套；昼夜温差 ≥9 且早间 <18 时补一层打底
+- 基础一套 = 上衣 + 下装 + 鞋，连衣裙可替代上衣+下装，配饰 0–1 件加分
+- 打分：`|单品厚薄 − 需求厚薄|` 越小越优，同分按 id 稳定排序；三套互不相同
+- `layer` 与 `formality` 在规则里由品类/场合推导（库里这两列为空）
+- 场合过滤：单品 `occasion` 为空或等于查询值都可入选
 
 ## W1 验收
 
