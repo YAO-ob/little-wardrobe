@@ -93,6 +93,27 @@ class ItemListOut(BaseModel):
     items: list[ItemOut]
 
 
+class WeatherOut(BaseModel):
+    city: str
+    date: str = Field(description="该城市时区的今天，YYYY-MM-DD")
+    t_min: float = Field(description="当日最低气温，℃")
+    t_max: float = Field(description="当日最高气温，℃")
+    feels_min: float = Field(description="当日最低体感温度，℃")
+    feels_max: float = Field(description="当日最高体感温度，℃")
+    precip_prob: float = Field(description="当日最大降水概率，%")
+    wind: float = Field(description="当日最大风速，km/h")
+    uv: float = Field(description="当日最大 UV 指数，无量纲")
+    cached: bool = Field(
+        description="true = 命中进程内缓存（按 城市坐标+日期 缓存 2 小时）"
+    )
+    stale: bool = Field(
+        description=(
+            "true = 上游失败，返回的是上一次的成功结果（可能是几小时前的）；"
+            "前端应提示「天气可能不是最新」。cached 同时为 true"
+        )
+    )
+
+
 def parse_season(raw: str | None) -> list[str]:
     if not raw:
         return []

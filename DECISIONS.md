@@ -270,4 +270,87 @@ hover 能看到「删除」，点下去既没有 `window.confirm` 弹窗，也�
 | d) 后端测试 | 16 passed，不回退 |
 | 真实库 | 启动时自动升到 `cc1bfe59e040`，57 件单品未动，`outfits` 0 行 |
 
+## 21. N1：天气服务（2026-11-21）
+
+### 结构
+
+- `app/data/cities.py`：8 个内置城市（杭州默认 + 上海/北京/广州/深圳/成都/南京/武汉），坐标 3 位小数，全部 `Asia/Shanghai`。不做在线 geocoding：中文城市名在 Open-Meteo geocoding 上召回不稳，查不到就 400，让调用方明确失败。
+- `app/weather.py`：取数 + 缓存 + 降级；`app/routers/weather.py` 只做 HTTP 映射。
+- 只取今天（`forecast_days=1`），不做多日、不做多时区换算。`date` 由城市时区的本地时间算出，不取上游返回的 `daily.time`（避免跨零点时两边不一致）。
+
+### 缓存
+
+- key = `(round(lat,3), round(lon,3), date)`，TTL 硬编码 2 小时，进程内 dict。
+- **不用响应里的坐标**：Open-Meteo 会把坐标吸附到网格（传 30.2741 可能返回 30.263618），拿响应值当 key 会永远 hit 不了。测试里特意让 fixture 的 lat/lon 与请求值不同，就是在守这条。
+- 过期的成功结果不删：上游失败时还能拿出来降级。
+
+### 降级语义
+
+| 情况 | 返回 |
+|---|---|
+| 缓存新鲜 | 200，`cached=true, stale=false`，不打上游 |
+| 上游失败 + 有过成功结果 | 200，`cached=true, stale=true`（前端提示「天气可能不是最新」） |
+| 上游失败 + 无任何缓存 | 502，`detail.code = weather_upstream_failed` |
+| 城市不在表里 | 400，detail 列出可选城市 |
+
+超时 5 秒；连接失败、非 200、JSON 结构异常都折成 `UpstreamError`，不把半截数据带出去。
+
+### 日志
+
+`weather city=… date=… cache=hit|miss|stale elapsed_ms=…`，只记这四个字段，**不打响应体**（否则日志会变成噪音）。降级与失败分别用 warning / error。
+
+### 更正：不是网络问题，是坐标写反（同一个迁移）
+
+上一版这里写着「上游不可达、TLS 握手超时」，**这个判断是错的**，作废。
+
+真实原因：`City(name, latitude, longitude, timezone)` 字段顺序是纬度在前，但我把 8 个城市全按「经度, 纬度」填了。中国城市经度 100–125 全部超出纬度 ±90，上游直接回 400：
+
+```
+{"reason":"Latitude must be in range of -90 to 90°. Given: 120.155.","error":true}
+```
+
+链路里表现为 `502 天气服务返回 HTTP 400`。我当时先看到 `urllib` 的 `handshake operation timed out` 就下了「网络不通」的结论，没去核对参数——两个现象撞在一起，选了错的那个。
+
+**修法**：8 个城市按 (纬度, 经度) 重填；`City.__post_init__` 加范围校验（纬度 -90~90、经度 -180~180，越界 `raise ValueError` 带城市名），这类错误在 import 时就炸，不用等上游。范围没有放宽。
+
+**规矩（新增）**：假上游只能验流程，**验不出参数对不对**。凡是往后端之外拼请求参数的（坐标、日期格式、字段名、单位），都必须有一条 golden 断言直接断言参数本身，不能只断言「拿到 200」。
+
+对应的 golden 测试（`backend/tests/test_weather.py`）：
+
+- 杭州纬度 ≈30.274（±1）、经度 ≈120.155（±1），且 `latitude < 90 < longitude`
+- 每个城市都满足 `-90 <= lat <= 90`
+- `weather._params(杭州)` 里 `latitude == city.latitude`（不是经度）
+- 故意写反的 `City("写反了", 120.155, 30.274, ...)` 必须抛 `ValueError`
+
+### 验收状态（真上游，已执行）
+
+修正后打真实 Open-Meteo：
+
+| 请求 | 结果 |
+|---|---|
+| `GET /api/weather?city=杭州`（首次） | **200**，914ms，`cached=false` |
+| 10 秒内第二次 | **200**，1ms，`cached=true` |
+| `city=瞎编城市` | **400**，detail 列出可选城市 |
+| `city=上海` | **200** |
+
+杭州 2026-11-21 的真实返回（给用户跟手机天气核对）：
+
+```json
+{"city":"杭州","date":"2026-11-21","t_min":3.1,"t_max":15.5,
+ "feels_min":0.8,"feels_max":13.2,"precip_prob":0.0,"wind":6.5,"uv":4.45,
+ "cached":false,"stale":false}
+```
+
+单位经实测确认：温度 ℃、风速 km/h、降水 %、UV 无量纲。
+
+| 测试 | 结果 |
+|---|---|
+| `pytest backend/tests` | **28 passed**（原 16 + 天气 8 + golden 4） |
+
+### 顺带发现的环境问题
+
+本机 8000 端口上跑的是**修正前**的进程（打 `city=杭州` 还回 `502 天气服务返回 HTTP 400`，和你看到的现象一致）。它由本会话之外的终端启动，当前沙箱会话对它 `Stop-Process`/`taskkill` 都返回「拒绝访问」，杀不掉，所以本轮真上游验证改在 **8001** 端口做。
+
+**你需要做的**：把那个 8000 的进程停掉再 `.\dev.cmd`，否则新代码不会生效——这是上一轮「改了没生效」的同类问题，只不过这次是进程而不是 dev server 缓存。
+
 

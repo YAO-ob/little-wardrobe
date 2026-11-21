@@ -84,6 +84,7 @@ python -m alembic upgrade head
 | GET | `/api/items/{id}` | 单品详情 |
 | PATCH | `/api/items/{id}` | 局部更新（补颜色/品牌/价格等选填字段） |
 | DELETE | `/api/items/{id}` | 软删除 |
+| GET | `/api/weather?city=杭州` | 今天的日预报（Open-Meteo）。不传 city 用杭州；城市不在内置表里 → 400；上游失败有旧数据 → 200 + `stale=true`；无旧数据 → 502 |
 
 图片两阶段的约定：上传成功不等于图已入库；只有单品保存成功才会搬出 tmp。启动时会清空 `media/tmp/`，所以半途而废的上传不会留下孤儿图。
 
@@ -136,4 +137,5 @@ node scripts\manual\e2e-r2-keyboard.mjs
 
 ## 第三方
 
-- 天气数据计划使用 [Open-Meteo](https://open-meteo.com/)（免 key，非商用，需署名）——W2 接入时在页面与 README 显式标注。
+- 天气数据来自 [Open-Meteo](https://open-meteo.com/)（免 key，**非商用**，需署名）。后端代取、按「坐标+日期」缓存 2 小时，前端不直连。
+- 上游不可达时会退回上一次成功结果并标 `stale=true`，不会把错误伪装成正常数据。
