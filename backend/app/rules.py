@@ -66,6 +66,9 @@ class RuleItem:
     category: str
     warmth: int | None = None
     occasion: str | None = None
+    # 下面两项：库里存了就优先用，没存才按品类/场合推导
+    formality: int | None = None
+    layer: str | None = None
 
 
 @dataclass(frozen=True)
@@ -87,13 +90,23 @@ class RecommendPlan:
     notice: str | None
 
 
-def layer_of(category: str) -> str | None:
+def layer_from_category(category: str) -> str | None:
     return LAYER_BY_CATEGORY.get(category)
 
 
+def layer_of(item: RuleItem) -> str | None:
+    """存量优先：用户补录过 layer 就用它，没填才按品类推导。"""
+    return item.layer or layer_from_category(item.category)
+
+
 def formality_of(occasion: str | None) -> int:
-    """场合 → 正式度；未知场合按日常处理。"""
+    """场合 → 正式度（用于「目标正式度」）。"""
     return FORMALITY_BY_OCCASION.get(occasion or "", 2)
+
+
+def formality_level(item: RuleItem) -> int:
+    """存量优先：用户填了正式度就用它，没填才按场合推导。"""
+    return item.formality if item.formality is not None else formality_of(item.occasion)
 
 
 def need_warmth(feels_min: float) -> int:
@@ -119,7 +132,7 @@ def _warmth(item: RuleItem) -> int:
 
 
 def _item_key(item: RuleItem, target_warmth: int, target_formality: int) -> tuple[int, int, int]:
-    item_formality = formality_of(item.occasion) if item.occasion else target_formality
+    item_formality = formality_level(item)
     return (
         abs(_warmth(item) - target_warmth),
         abs(item_formality - target_formality),

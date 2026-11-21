@@ -3,6 +3,7 @@ import type {
   ItemFilter,
   ItemList,
   Occasion,
+  OutfitList,
   RecommendResult,
   SavedOutfit,
   Warmth,
@@ -64,6 +65,10 @@ export function deleteItem(id: number): Promise<void> {
   return request(`/items/${id}`, { method: 'DELETE' })
 }
 
+export function updateItem(id: number, patch: Record<string, unknown>): Promise<import('./types').Item> {
+  return request(`/items/${id}`, { method: 'PATCH', body: JSON.stringify(patch) })
+}
+
 export function getRecommend(
   options: {
     city?: string
@@ -114,4 +119,12 @@ export function saveOutfit(payload: {
       note: payload.note,
     }),
   })
+}
+
+export function getOutfits(limit = 10): Promise<OutfitList> {
+  return request<OutfitList>(`/outfits?limit=${limit}`)
+}
+
+export function getCities(): Promise<{ cities: string[]; default: string }> {
+  return request<{ cities: string[]; default: string }>('/cities')
 }

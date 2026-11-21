@@ -150,6 +150,29 @@ def test_image_id_must_be_unclaimed(client):
     assert second.status_code == 422
 
 
+def test_patch_accepts_all_editable_fields(client):
+    item = client.post("/api/items", json={"category": "top"}).json()
+
+    payload = {
+        "color_family": "藏青",
+        "color_hex": "#223344",
+        "brand": "测试牌",
+        "material": "棉",
+        "price": 199.5,
+        "formality": 4,
+        "layer": "inner",
+        "season": ["spring", "autumn"],
+        "note": "偏薄",
+        "occasion": "work",
+    }
+    res = client.patch(f"/api/items/{item['id']}", json=payload)
+    assert res.status_code == 200, res.text
+
+    body = res.json()
+    for key, value in payload.items():
+        assert body[key] == value, key
+
+
 def test_patch_and_delete(client):
     item = client.post("/api/items", json={"category": "dress"}).json()
 

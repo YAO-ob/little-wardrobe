@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { keepPreviousData, useQuery } from '@tanstack/react-query'
-import { getRecommend, saveOutfit } from '../../core/api'
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
+import { getCities, getOutfits, getRecommend, saveOutfit } from '../../core/api'
 import { CATEGORIES, CATEGORY_LABEL, OCCASIONS } from '../../core/labels'
-import { CITIES, type CityName } from '../../core/cities'
+import { DEFAULT_CITY, FALLBACK_CITIES } from '../../core/cities'
 import { badgeFor, maskKey } from '../../core/recommendBadge'
 import { weatherAgeText } from '../../core/weatherAge'
 import type { Category, Occasion, RecommendOutfit } from '../../core/types'
@@ -48,6 +48,7 @@ function EyeOffIcon() {
 }
 
 export default function OutfitPage() {
+  const queryClient = useQueryClient()
   const [occasion, setOccasion] = useState<Occasion>('casual')
   const [savedKeys, setSavedKeys] = useState<string[]>([])
   const [savingKey, setSavingKey] = useState<string | null>(null)
@@ -55,7 +56,7 @@ export default function OutfitPage() {
   const [apiKey, setApiKey] = useState(() => getLlmKey())
   const [aiMode, setAiMode] = useState(false)
   const [keyVersion, setKeyVersion] = useState(0)
-  const [city, setCityState] = useState<CityName>(() => getCity())
+  const [city, setCityState] = useState<string>(() => getCity(FALLBACK_CITIES))
   const [cityOpen, setCityOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [draftKey, setDraftKey] = useState('')
@@ -83,7 +84,34 @@ export default function OutfitPage() {
     placeholderData: keepPreviousData,
   })
 
-  function chooseCity(name: CityName) {
+  const outfitsQuery = useQuery({
+    queryKey: ['outfits'],
+    queryFn: () => getOutfits(10),
+    staleTime: 30_000,
+    retry: false,
+  })
+
+  // 城市列表以后端为准；接口挂了就用兜底列表，下拉不会因此不可用
+  const citiesQuery = useQuery({
+    queryKey: ['cities'],
+    queryFn: getCities,
+    staleTime: 60 * 60 * 1000,
+    retry: false,
+  })
+  const cityList: string[] =
+    citiesQuery.data?.cities && citiesQuery.data.cities.length > 0
+      ? citiesQuery.data.cities
+      : [...FALLBACK_CITIES]
+
+  // 后端删了某个城市、而 localStorage 里还存着它 → 回落到默认城市
+  useEffect(() => {
+    if (!citiesQuery.data) return
+    if (!citiesQuery.data.cities.includes(city)) {
+      setCityState(citiesQuery.data.default || DEFAULT_CITY)
+    }
+  }, [citiesQuery.data, city])
+
+  function chooseCity(name: string) {
     setCity(name) // 写 localStorage，刷新后仍是这个城市
     setCityState(name)
     setCityOpen(false)
@@ -162,6 +190,7 @@ export default function OutfitPage() {
         note: `规则推荐 · ${occasion}`,
       })
       setSavedKeys((prev) => [...prev, key])
+      await queryClient.invalidateQueries({ queryKey: ['outfits'] })
       toast('已记下今天的搭配')
     } catch (err) {
       toast(err instanceof Error ? err.message : '保存失败')
@@ -193,7 +222,7 @@ export default function OutfitPage() {
           <>
             <div className="fixed inset-0 z-10" onClick={() => setCityOpen(false)} />
             <div className="absolute left-3 top-10 z-20 w-36 overflow-hidden rounded-xl border border-black/10 bg-white shadow-lg">
-              {CITIES.map((name) => (
+              {cityList.map((name) => (
                 <button
                   key={name}
                   type="button"
@@ -361,6 +390,40 @@ export default function OutfitPage() {
           </article>
         )
       })}
+
+      <section className="space-y-1.5 pb-1">
+        <p className="text-[11px] font-medium text-black/40">最近穿过</p>
+        {outfitsQuery.isLoading && <p className="text-[11px] text-black/30">加载中…</p>}
+        {!outfitsQuery.isLoading && (outfitsQuery.data?.outfits.length ?? 0) === 0 && (
+          <p className="text-[11px] text-black/30">还没有保存过搭配</p>
+        )}
+        {(outfitsQuery.data?.outfits ?? []).map((record) => (
+          <div key={record.id} className="flex items-center gap-2 text-[11px] text-black/45">
+            <span className="w-20 shrink-0 tabular-nums">{record.worn_on}</span>
+            <div className="flex gap-1">
+              {record.items.map((item) =>
+                item.thumb_url ? (
+                  <img
+                    key={item.id}
+                    src={item.thumb_url}
+                    alt={item.category ?? ''}
+                    loading="lazy"
+                    className="h-6 w-6 rounded object-cover"
+                  />
+                ) : (
+                  <span
+                    key={item.id}
+                    className="flex h-6 w-6 items-center justify-center rounded bg-black/5 text-[10px] text-black/30"
+                  >
+                    ?
+                  </span>
+                ),
+              )}
+            </div>
+            <span>{record.item_ids.length} 件</span>
+          </div>
+        ))}
+      </section>
 
       <p className="pb-2 text-center text-[11px] text-black/30">
         搭配由规则生成（{CATEGORIES.length} 类单品 · {city}）· 天气数据 Open-Meteo

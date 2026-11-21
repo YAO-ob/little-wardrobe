@@ -957,4 +957,69 @@ d) delete row + down: 502
 - 没有过期上限：三个月前的快照也会被当成 stale 返回（前端会显示「N 小时前」，足够暴露问题）。
 - 不做多城市清理、不做告警（按范围）。
 
+## 33. W5e：保存反馈闭环 / 媒体清理 / 城市单一来源（2026-11-22）
+
+### ① 保存搭配后的反馈
+
+- `OutfitOut` 增加 `items: [{id, category, thumb_url}]`（最多 6 件，按 `outfit_items.id` 排序）。
+- 实现是**两次查询**：先查 outfits（`selectinload(items)`），再把所有涉及的 item_id 用一条 `select(Item).where(Item.id.in_(...))` 取出来——20 条搭配也不会 N+1。
+- 缩略图逻辑抽到 `schemas.primary_thumb()`，推荐接口和搭配历史共用；软删的单品保留 `id` 与 `category`，但 `thumb_url` 为 `null`（历史不该因为删了衣服就消失）。
+- 前端搭配页底部加「最近穿过」：日期 + 24px 缩略图 + 「N 件」，空状态「还没有保存过搭配」；保存成功后 `invalidateQueries(['outfits'])`，新记录立刻出现。
+
+### ② `scripts/clean_media.py`
+
+- 默认 dry-run，`--apply` 才删；**数据库只读打开**（`file:...?mode=ro`），脚本不写库。
+- 可见集合 = 未软删单品的 `images.path` / `thumb_path`；`<stem>_1024.webp` / `_256.webp` 按 stem 归并；originals 用去扩展名的 stem。stem 不在集合里即孤儿。tmp 里的文件一并清。
+- 实测：可见 37 件 → originals 63 里 26 个孤儿、derived 126 里 52 个孤儿，共 78 个文件 **118.2 MB**；`--apply` 后 originals 37 / derived 74 / tmp 0，37 件单品的缩略图全部 200（无破图）。
+
+### ③ 城市列表单一来源
+
+- 新增 `GET /api/cities` → `{cities, default}`，直接读 `backend/app/data/cities.py`。
+- 前端 `useQuery(['cities'])`（`staleTime` 1 小时）；拿不到就用 `core/cities.ts` 里的 `FALLBACK_CITIES` 兜底，下拉不会因为接口挂了就不可用。
+- `resolveCity(raw, available)` 增加第二个参数；后端删了某城市而 localStorage 还存着它时，会自动回落到默认城市。
+- 测试里用 `monkeypatch.setitem(CITIES, "测试城", ...)` 验证「后端加一个城市，接口立刻能看到」，用例结束自动还原。
+
+### 验证
+
+| 项 | 结果 |
+|---|---|
+| 后端 | **161 passed**（159 + 2） |
+| 前端 | **50 passed** / typecheck 0 / build 0 |
+| 真实接口 | `GET /api/outfits` 带 4 条 brief（category + `/media/derived/..._256.webp`）；`GET /api/cities` 返回 8 城 + 默认杭州 |
+| 清理脚本 | dry-run 78 个 / 118.2 MB，apply 后文件数与可见单品一致，缩略图 0 破图 |
+
+验收时创建的那条搭配已用 `DELETE` 软删，`/api/outfits` 回到 0 条（空状态可见）。
+
+## 34. W5f：单品详情 + 补录编辑（2026-11-22）
+
+### 先修的数据不一致
+
+`rules.py` 之前完全按 `category` / `occasion` 推导 `layer` 和正式度，**库里存的值被忽略**——用户补录了也不影响推荐，等于「填了没用」。
+
+改成存量优先：
+
+- `RuleItem` 增加 `formality` / `layer` 两个字段，路由映射时带上 `row.formality` / `row.layer`。
+- `layer_of(item)`：`item.layer` 有值就用，否则 `layer_from_category(item.category)`。
+- `formality_level(item)`：`item.formality` 有值就用，否则 `formality_of(item.occasion)`；`formality_of(occasion)` 保留，用于「目标正式度」。
+- 排序键 `_item_key` 改用 `formality_level`；`llm_pick` 的 prompt 里也改成展示存量值。
+- `outfits` 写 `outfit_items.layer` 时同样存量优先。
+
+顺带一个行为变化：没填场合的单品，正式度从「等于目标值（距离 0）」变成「按日常 2 算」，在 work/formal 场合不会再被无脑优先。
+
+### 详情弹层
+
+- 图库卡片整块可点（`cursor-pointer`），删除按钮 `stopPropagation`，点删除不会同时开详情。
+- 弹层：1024 那档大图 + 只读（品类、厚薄、created_at）+ 可编辑（颜色、品牌、材质、价格、正式度 1–5、层次、季节多选、备注）+ 保存 / 取消 / 删除（删除是按钮内二次确认）。
+- 保存走 `PATCH /api/items/{id}`（本来就支持这些字段，补了一条测试钉住），成功后 `invalidateQueries(['items'])` 并关闭；角标 `信息不全` 只看 `color_family`，所以补颜色后角标会消失、筛选数量 -1。
+- 表单 → body 的转换抽成 `core/itemPatch.ts`：空字符串转 `null`、没改的字段不进 body、价格/正式度做数字转换；价格非数字或 <0、正式度不在 1–5 时就地提示且不发请求。
+
+### 验证
+
+| 项 | 结果 |
+|---|---|
+| 后端 | **164 passed**（161 + 2 rules + 1 PATCH 全字段） |
+| 前端 | **56 passed**（50 + 6） / typecheck 0 / build 0 |
+| 真实接口 | `GET /api/items/{id}` 返回全部可编辑字段，`image.url` 是 `_1024.webp` 那档 |
+| 浏览器点击（a–e） | **未执行**，需要你点 |
+
 

@@ -2,9 +2,27 @@
 
 from __future__ import annotations
 
+import io
 from datetime import date
 
+from PIL import Image
+
 from app.models import Outfit, OutfitItem
+
+
+def _jpeg() -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", (60, 60), (10, 20, 30)).save(buf, "JPEG")
+    return buf.getvalue()
+
+
+def _item_with_photo(client, category: str = "top") -> dict:
+    image = client.post(
+        "/api/images", files={"file": ("p.jpg", _jpeg(), "image/jpeg")}
+    ).json()
+    return client.post(
+        "/api/items", json={"category": category, "image_ids": [image["id"]]}
+    ).json()
 
 
 def _item(client, category: str, **extra) -> dict:
@@ -119,6 +137,47 @@ def test_list_outfits_returns_item_ids(client):
     assert listing["total"] >= 1
     row = next(o for o in listing["outfits"] if o["id"] == created["id"])
     assert row["item_ids"] == [top["id"], bottom["id"]]
+
+
+def test_list_outfits_includes_item_briefs(client):
+    top = _item_with_photo(client, "top")
+    created = client.post("/api/outfits", json={"item_ids": [top["id"]]}).json()
+
+    listing = client.get("/api/outfits", params={"limit": 20}).json()
+    row = next(o for o in listing["outfits"] if o["id"] == created["id"])
+
+    assert row["items"] == [
+        {
+            "id": top["id"],
+            "category": "top",
+            "thumb_url": row["items"][0]["thumb_url"],
+        }
+    ]
+    assert row["items"][0]["thumb_url"].startswith("/media/derived/")
+
+
+def test_soft_deleted_item_keeps_id_but_drops_thumb(client):
+    top = _item_with_photo(client, "top")
+    created = client.post("/api/outfits", json={"item_ids": [top["id"]]}).json()
+    client.delete(f"/api/items/{top['id']}")
+
+    listing = client.get("/api/outfits", params={"limit": 20}).json()
+    row = next(o for o in listing["outfits"] if o["id"] == created["id"])
+
+    assert row["item_ids"] == [top["id"]]
+    assert row["items"][0]["id"] == top["id"]
+    assert row["items"][0]["thumb_url"] is None
+
+
+def test_outfit_brief_is_capped_at_six_items(client):
+    ids = [_item_with_photo(client, "accessory")["id"] for _ in range(8)]
+    created = client.post("/api/outfits", json={"item_ids": ids}).json()
+
+    listing = client.get("/api/outfits", params={"limit": 20}).json()
+    row = next(o for o in listing["outfits"] if o["id"] == created["id"])
+
+    assert len(row["item_ids"]) == 8
+    assert len(row["items"]) == 6
 
 
 def test_delete_outfit_is_soft(client):

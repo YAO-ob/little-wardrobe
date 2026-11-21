@@ -5,6 +5,7 @@ import { resolveDeleteClick } from '../../core/deleteConfirm'
 import { CATEGORIES, CATEGORY_LABEL, OCCASIONS, OCCASION_LABEL, WARMTH_LABEL } from '../../core/labels'
 import type { Category, Item, Occasion } from '../../core/types'
 import { toast } from '../../adapters/toast'
+import ItemDetailModal from '../components/ItemDetailModal'
 
 export default function GalleryPage() {
   const queryClient = useQueryClient()
@@ -15,6 +16,7 @@ export default function GalleryPage() {
   const [deletingId, setDeletingId] = useState<number | null>(null)
   // 处于「确认删除」状态的卡片；null 表示没有
   const [confirmingId, setConfirmingId] = useState<number | null>(null)
+  const [detail, setDetail] = useState<Item | null>(null)
 
   const filter = useMemo(
     () => ({ category: categories, occasion: occasion ?? undefined, incomplete: incompleteOnly, q }),
@@ -38,6 +40,7 @@ export default function GalleryPage() {
     try {
       await deleteItem(item.id)
       await queryClient.invalidateQueries({ queryKey: ['items'] })
+      if (detail?.id === item.id) setDetail(null)
       toast('已删除')
     } catch (err) {
       toast(err instanceof Error ? err.message : '删除失败')
@@ -145,7 +148,8 @@ export default function GalleryPage() {
               return (
                 <figure
                   key={item.id}
-                  className="group relative overflow-hidden rounded-xl bg-white shadow-sm"
+                  onClick={() => setDetail(item)}
+                  className="group relative cursor-pointer overflow-hidden rounded-xl bg-white shadow-sm"
                 >
                   {item.image ? (
                     <img
@@ -166,7 +170,11 @@ export default function GalleryPage() {
                   )}
                   <button
                     type="button"
-                    onClick={() => onDeleteClick(item)}
+                    onClick={(event) => {
+                      // 点删除不能顺带打开详情
+                      event.stopPropagation()
+                      onDeleteClick(item)
+                    }}
                     disabled={deletingId === item.id}
                     data-armed={confirmingId === item.id}
                     aria-label={
@@ -197,6 +205,8 @@ export default function GalleryPage() {
           </div>
         </>
       )}
+
+      {detail && <ItemDetailModal item={detail} onClose={() => setDetail(null)} />}
     </div>
   )
 }

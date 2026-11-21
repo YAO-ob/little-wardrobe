@@ -11,8 +11,8 @@ from sqlalchemy.orm import Session, selectinload
 
 from ..db import get_db
 from ..models import Item, Outfit, OutfitItem, utcnow
-from ..rules import layer_of
-from ..schemas import OutfitCreate, OutfitListOut, OutfitOut
+from ..rules import layer_from_category
+from ..schemas import OutfitCreate, OutfitItemBrief, OutfitListOut, OutfitOut, primary_thumb
 
 router = APIRouter()
 
@@ -49,11 +49,13 @@ def create_outfit(payload: OutfitCreate, db: Session = Depends(get_db)) -> Outfi
 
     by_id = {row.id: row for row in rows}
     for item_id in item_ids:
+        item_row = by_id[item_id]
         db.add(
             OutfitItem(
                 outfit_id=outfit.id,
                 item_id=item_id,
-                layer=layer_of(by_id[item_id].category),
+                # 存量优先，没填才按品类推导
+                layer=item_row.layer or layer_from_category(item_row.category),
             )
         )
     db.commit()
@@ -83,6 +85,27 @@ def list_outfits(
         .all()
     )
 
+    # 一次把涉及的 items 全查出来（含软删的），避免 N+1：limit=20 时总共 2 次查询
+    item_ids = {link.item_id for row in rows for link in row.items}
+    item_rows = (
+        db.execute(
+            select(Item).options(selectinload(Item.images)).where(Item.id.in_(item_ids))
+        )
+        .scalars()
+        .all()
+        if item_ids
+        else []
+    )
+    by_id = {item.id: item for item in item_rows}
+
+    def brief(link: OutfitItem) -> OutfitItemBrief:
+        item = by_id.get(link.item_id)
+        if item is None:
+            return OutfitItemBrief(id=link.item_id)
+        # 软删的单品保留 id 和品类，但不再给缩略图（历史记录不该消失）
+        thumb = None if item.deleted_at else primary_thumb(item)
+        return OutfitItemBrief(id=item.id, category=item.category, thumb_url=thumb)
+
     return OutfitListOut(
         total=total,
         outfits=[
@@ -90,6 +113,7 @@ def list_outfits(
                 id=row.id,
                 worn_on=row.worn_on,
                 item_ids=[link.item_id for link in sorted(row.items, key=lambda x: x.id)],
+                items=[brief(link) for link in sorted(row.items, key=lambda x: x.id)[:6]],
             )
             for row in rows
         ],

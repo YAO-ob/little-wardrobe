@@ -24,6 +24,7 @@ from ..schemas import (
     RecommendOut,
     RecommendOutfitOut,
     media_url,
+    primary_thumb,
 )
 from .weather import resolve_weather, weather_out
 
@@ -68,13 +69,6 @@ def _record_metric(
         db.rollback()
 
 
-def _thumb(item: Item) -> str | None:
-    if not item.images:
-        return None
-    primary = next((img for img in item.images if img.is_primary), item.images[0])
-    return media_url(primary.thumb_path or primary.path)
-
-
 def _outfit_out(
     items: tuple[RuleItem, ...] | list[RuleItem], reason: str, thumbs: dict[int, str | None]
 ) -> RecommendOutfitOut:
@@ -84,7 +78,7 @@ def _outfit_out(
                 id=item.id,
                 category=item.category,
                 warmth=item.warmth,
-                layer=layer_of(item.category),
+                layer=layer_of(item),
                 thumb_url=thumbs.get(item.id),
             )
             for item in items
@@ -118,9 +112,16 @@ async def recommend(
         .all()
     )
 
-    thumbs = {row.id: _thumb(row) for row in rows}
+    thumbs = {row.id: primary_thumb(row) for row in rows}
     by_id = {
-        row.id: RuleItem(id=row.id, category=row.category, warmth=row.warmth, occasion=row.occasion)
+        row.id: RuleItem(
+            id=row.id,
+            category=row.category,
+            warmth=row.warmth,
+            occasion=row.occasion,
+            formality=row.formality,
+            layer=row.layer,
+        )
         for row in rows
     }
     facts = WeatherFacts(

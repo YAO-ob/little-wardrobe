@@ -18,6 +18,14 @@ def media_url(path: str | None) -> str:
     return f"{MEDIA_URL}/{path}" if path else ""
 
 
+def primary_thumb(item) -> str | None:  # noqa: ANN001
+    """单品主图缩略图；推荐与搭配历史共用这一处，避免两套实现漂移。"""
+    if not item.images:
+        return None
+    primary = next((img for img in item.images if img.is_primary), item.images[0])
+    return media_url(primary.thumb_path or primary.path)
+
+
 class ImageOut(BaseModel):
     id: int
     url: str
@@ -176,10 +184,18 @@ class OutfitCreate(BaseModel):
     note: str | None = None
 
 
+class OutfitItemBrief(BaseModel):
+    id: int
+    category: str | None = None
+    thumb_url: str | None = None
+
+
 class OutfitOut(BaseModel):
     id: int
     worn_on: str
     item_ids: list[int]
+    # 历史记录用：最多 6 件的摘要；软删的单品仍给 id，thumb_url 为 null
+    items: list[OutfitItemBrief] = Field(default_factory=list)
 
 
 class OutfitListOut(BaseModel):

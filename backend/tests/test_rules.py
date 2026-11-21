@@ -10,7 +10,9 @@ from app.rules import (
     RuleItem,
     WeatherFacts,
     build_outfits,
+    formality_level,
     formality_of,
+    layer_from_category,
     layer_of,
     need_extra,
     need_outer,
@@ -88,18 +90,46 @@ def test_need_extra_requires_both_spread_and_cool_morning():
 
 
 def test_layer_and_formality_derivation():
-    assert layer_of("outer") == "outer"
-    assert layer_of("top") == "inner"
-    assert layer_of("dress") == "inner"
-    assert layer_of("bottom") is None
-    assert layer_of("shoes") is None
-    assert layer_of("accessory") is None
+    assert layer_from_category("outer") == "outer"
+    assert layer_from_category("top") == "inner"
+    assert layer_from_category("dress") == "inner"
+    assert layer_from_category("bottom") is None
+    assert layer_from_category("shoes") is None
+    assert layer_from_category("accessory") is None
 
     assert formality_of("work") == 4
     assert formality_of("formal") == 5
     assert formality_of("sport") == 1
     assert formality_of("casual") == 2
     assert formality_of(None) == 2
+
+
+def test_stored_layer_wins_over_category():
+    """用户补录了 layer，就按补录的算；没填才按品类推导。"""
+    assert layer_of(RuleItem(1, "top", 2, "casual", layer="outer")) == "outer"
+    assert layer_of(RuleItem(2, "top", 2, "casual")) == "inner"
+    assert layer_of(RuleItem(3, "outer", 3, "casual", layer=None)) == "outer"
+
+
+def test_stored_formality_wins_over_occasion():
+    assert formality_level(RuleItem(1, "top", 2, "casual", formality=5)) == 5
+    assert formality_level(RuleItem(2, "top", 2, "casual")) == 2
+    assert formality_level(RuleItem(3, "top", 2, "work")) == 4
+
+
+def test_stored_formality_changes_ranking():
+    """同一场合下，补录了正式度的单品排序要跟着变。"""
+    plain = RuleItem(1, "top", 2, None)  # 场合为空 → 推导正式度 2
+    formal = RuleItem(2, "top", 2, None, formality=5)  # 存量 5
+
+    plan = build_outfits(
+        WeatherFacts(date="2026-11-22", feels_min=9.0, feels_max=15.0),
+        [plain, formal, RuleItem(10, "bottom", 2, None), RuleItem(20, "shoes", 2, None)],
+        occasion="formal",
+    )
+
+    first_top = next(item for item in plan.outfits[0].items if item.category == "top")
+    assert first_top.id == 2  # formal 目标 5，存了 5 的那件排前面
 
 
 # --- 极端温度 -------------------------------------------------------------

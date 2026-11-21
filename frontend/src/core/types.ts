@@ -108,8 +108,20 @@ export interface RecommendResult {
   cached: boolean
 }
 
+export interface OutfitItemBrief {
+  id: number
+  category: string | null
+  thumb_url: string | null
+}
+
 export interface SavedOutfit {
   id: number
   worn_on: string
   item_ids: number[]
+  items: OutfitItemBrief[]
+}
+
+export interface OutfitList {
+  total: number
+  outfits: SavedOutfit[]
 }

@@ -16,6 +16,7 @@ from .rules import (
     WeatherFacts,
     build_outfits,
     filter_usable,
+    formality_level,
     formality_of,
     layer_of,
     need_outer,
@@ -128,7 +129,7 @@ def build_user_prompt(
     for item in pool:
         lines.append(
             f"- id={item.id} category={item.category} warmth={item.warmth} "
-            f"layer={layer_of(item.category)} formality={formality_of(item.occasion)}"
+            f"layer={layer_of(item)} formality={formality_level(item)}"
         )
     lines.append("")
     lines.append("只能从上面给出的 id 中选，不许发明。输出 JSON。")
