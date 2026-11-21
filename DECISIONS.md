@@ -708,6 +708,78 @@ latency_ms       = {"avg": 75.5,  "p50": 2,   "p95": 910}
 
 全量 **146 passed**（144 + 2）。
 
+## 28. N7：前端接模型（BYOK + AI 开关）（2026-11-21）
+
+### key 的存取
+
+- `adapters/llmKey.ts`：`getLlmKey / setLlmKey / clearLlmKey`，读写 `localStorage['ew.llmKey']`。放 adapters 是因为 `core/` 不许碰 `window`。
+- key **只走请求头 `X-LLM-Key`**：不进 URL、不进日志、页面只回显 `maskKey()` 打码后的 `sk-****`，输入框 `type="password"`，不提供「显示」按钮。
+- **风险（接受）**：localStorage 明文 + 同源 XSS 可读。这是 BYOK 的既有取舍（服务端不落库、不写日志，换来「key 只属于使用者」）；真要更强隔离得上后端代理或 WebCrypto，超出范围。
+- 清除 key 会同时关掉 AI 开关，避免「开关开着但没 key」这种半吊子状态。
+
+### 请求与状态
+
+- `core/api.ts` 的 `getRecommend({ mode, llmKey, occasion, city })`：`mode=llm` 且给了 key 才带请求头；`request()` 的 headers 改成合并而不是覆盖，否则自定义头会把 `Content-Type` 顶掉。
+- 返回类型补上 `source / attempts / fallback_reason / cached`。
+- 徽标与文案在 `core/recommendBadge.ts`（纯函数，12 条单测）：`llm+cached=false → AI 精选`、`llm+cached=true → AI 精选 · 缓存`、`rules → 规则推荐 + 降级原因`。原因映射覆盖 `no_key / rate_limited / timeout / invalid_ids / invalid_outfit / truncated / missing_category / bad_json / network` 等，未知原因兜底「模型暂时不可用」。
+
+### 加载与超时
+
+- 模型正常 0.8–1.2s；后端最坏会等 ~10.5s（天气两次 5s 超时 + 0.5s 间隔）。所以前端设 **12s** 超时：AI 请求超过 12s 没回来就 `setAiMode(false)` 退回规则并 toast「这次有点慢，先给你规则推荐」。
+- 请求期间显示 `AI 正在挑衣服…`（`animate-pulse`），并用 `keepPreviousData` 保留上一批卡片，避免整块闪空。
+- 超时只是「前端不再等」，后端那次请求仍会跑完并记指标——这是有意的：宁可多一条指标，也不要中止后端写库。
+
+### 设置弹层
+
+- 右上角「⚙ 设置」打开固定定位弹层（点遮罩关闭，点面板不关）：状态文案「已配置（sk-****）/ 未配置」、密码框、保存、清除。
+- AI 开关在没 key 时是「视觉禁用」但**仍可点**：点了给 toast「先配置 API key」并自动打开设置弹层——真 `disabled` 的按钮点不了，用户会以为坏了。
+- 切换场合保持 AI 开关状态；切到别的 tab 再回来，组件重挂载，开关回到关、弹层关闭（不会重复弹）。
+
+### 验证
+
+| 项 | 结果 |
+|---|---|
+| 前端单测 | **35 passed**（原 23 + 徽标/文案 12） |
+| typecheck / build | 0 / 0（275KB，gzip 85KB） |
+| 构建产物含关键文案 | `AI 精选`、`AI 精选 · 缓存`、`规则推荐`、`先配置 API key`、`X-LLM-Key`、`ew.llmKey`、`AI 正在挑衣服` 全部命中 |
+| 后端契约（8000 实测） | `GET /api/recommend?mode=llm` 无 key → `source=rules, cached=false, fallback_reason=no_key, attempts=0` |
+| 浏览器里的 a–e | **未执行**（沙箱起不了浏览器），需要人工点 |
+
+### 局限
+
+- AI 开关不持久化：刷新后回到「关」，要再点一次。
+- 保存 key 前不做校验（不试打一次），填错要等第一次请求才发现——那样会白等一次超时。
+- 前端 12s 超时后不会取消后端请求。
+- key 明文存 localStorage，见上面的风险说明。
+
+### 弹层两态 + 显隐切换（N7b）
+
+**改法**：
+
+- 弹层分两态。未配置：空输入框 +「保存」+ 提示「在 DeepSeek 后台创建，形如 sk-...」。已配置：状态行「已配置（sk-****）」+ 眼睛按钮（可临时看全）+「更换」「清除」；点「更换」才展开输入框并自动聚焦，保存后回到已配置态。
+- 输入框和状态行各有一个眼睛按钮，`aria-label` 分别是「显示 key」/「隐藏 key」，图标用内联 SVG（睁眼/闭眼）随状态切换。
+- 输入框里按 `Enter` = 点保存。
+- 明文只在弹层里可见：关掉弹层即复位（`revealSaved`/`showDraft` 都置 false）；不进日志、不进 URL，请求之外不落任何地方。
+- 清除 → 回未配置态 + 关掉 AI 开关；保存 → toast「已保存」+ 切到已配置态。
+
+**又一次踩到「dev server 喂旧模块」**：改完后源码里明明有「更换」，但 5173 返回的模块里还是旧弹层（状态变量是新的、JSX 是旧的）。这是 DECISIONS 19 那条老问题：vite 的 watcher 早前报过 `EBUSY`，之后不再失效模块图。**验收 N7b 之前必须重启 `.\dev.cmd`**，否则看到的是旧弹层。构建产物（dist）是新的，字符串都在。
+
+### 验证（N7b）
+
+| 项 | 结果 |
+|---|---|
+| 前端单测 | 35 passed（无新增，纯 UI 改动） |
+| typecheck / build | 0 / 0（278KB / gzip 86KB） |
+| dist 含关键文案 | 「更换」「取消」「显示 key」「隐藏 key」「已配置」「形如 sk-...」全部命中 |
+| 浏览器里 a–d | **未执行**（无浏览器），且需先重启 dev server |
+
+### 图标语义修正 + 根治 stale module（N7c）
+
+- **眼睛图标改成反映当前状态**而不是下一步动作：key 可见 → 睁眼（`EyeIcon`），key 隐藏 → 斜线眼（`EyeOffIcon`）。`aria-label` 与 `title` 仍保持**动作语义**（可见时「隐藏 key」、隐藏时「显示 key」），两处按钮都加了 `title`，悬停能看到提示。之前的实现是反的，用户读成「点它会把眼睛闭上」，实际是「已经是闭眼状态」。
+- **`vite.config.ts` 开轮询**：`server.watch = { usePolling: true, interval: 300 }`。今天已经三次「源码改了、5173 还是旧模块」，每次排查半小时；Windows 上 Vite 的 watcher 在 EBUSY 之后不再失效模块图，轮询用少量 CPU 换确定性。
+- **实测轮询生效**：另起一个 5199 的 dev server，写一个探针文件 `MARK-ONE` → 改成 `MARK-TWO`，不重启、2 秒后再请求，拿到的是 `MARK-TWO`。探针已删除。
+- 注意：轮询只对**新启动**的 dev server 生效；当前 5173 那个旧进程仍是坏的，验收前要重启 `.\dev.cmd`。
+
 ### 未执行
 
 想在 8001 上跑一次真实降级链（无 key / 无效 key 各一次），但 Open-Meteo 这时又连不上（`ConnectTimeout`），`/api/recommend` 在天气那一步就 502 了，到不了 LLM。所以：

@@ -12,9 +12,13 @@ import type {
 const BASE = '/api'
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const isForm = init?.body instanceof FormData
   const res = await fetch(`${BASE}${path}`, {
-    headers: init?.body instanceof FormData ? undefined : { 'Content-Type': 'application/json' },
     ...init,
+    headers: {
+      ...(isForm ? {} : { 'Content-Type': 'application/json' }),
+      ...((init?.headers as Record<string, string> | undefined) ?? {}),
+    },
   })
   if (!res.ok) {
     let detail = `请求失败（${res.status}）`
@@ -61,13 +65,24 @@ export function deleteItem(id: number): Promise<void> {
 }
 
 export function getRecommend(
-  params: { city?: string; occasion?: Occasion } = {},
+  options: {
+    city?: string
+    occasion?: Occasion
+    mode?: 'rules' | 'llm'
+    /** BYOK：只放在请求头，不进 URL、不落日志 */
+    llmKey?: string
+  } = {},
 ): Promise<RecommendResult> {
   const query = new URLSearchParams()
-  if (params.city) query.set('city', params.city)
-  if (params.occasion) query.set('occasion', params.occasion)
+  if (options.city) query.set('city', options.city)
+  if (options.occasion) query.set('occasion', options.occasion)
+  if (options.mode) query.set('mode', options.mode)
   const suffix = query.toString()
-  return request<RecommendResult>(`/recommend${suffix ? `?${suffix}` : ''}`)
+
+  const headers: Record<string, string> = {}
+  if (options.mode === 'llm' && options.llmKey) headers['X-LLM-Key'] = options.llmKey
+
+  return request<RecommendResult>(`/recommend${suffix ? `?${suffix}` : ''}`, { headers })
 }
 
 /** 只回传后端需要的快照字段，不要把整个 Weather 塞进去。 */

@@ -100,6 +100,10 @@ export interface RecommendResult {
   weather: Weather
   outfits: RecommendOutfit[]
   notice: string | null
+  source: string
+  attempts: number
+  fallback_reason: string | null
+  cached: boolean
 }
 
 export interface SavedOutfit {
