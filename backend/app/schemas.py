@@ -137,6 +137,12 @@ class RecommendOut(BaseModel):
         default=None,
         description="衣橱缺品类等说明；例如「衣橱里没有下装，只能组出 1 套」",
     )
+    source: str = Field(default="rules", description="第一套的来源：rules 或 llm")
+    attempts: int = Field(default=0, description="调用模型的次数（0 表示没调）")
+    fallback_reason: str | None = Field(
+        default=None,
+        description="降级原因：no_key / timeout / rate_limited / upstream_5xx / bad_json / invalid_ids …",
+    )
 
 
 class WeatherSnapshotIn(BaseModel):

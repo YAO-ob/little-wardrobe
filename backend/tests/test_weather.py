@@ -309,9 +309,19 @@ def test_recommend_endpoint_shape(client, fake_http):
     assert res.status_code == 200, res.text
 
     body = res.json()
-    assert set(body) == {"date", "weather", "outfits", "notice"}
+    assert set(body) == {
+        "date",
+        "weather",
+        "outfits",
+        "notice",
+        "source",
+        "attempts",
+        "fallback_reason",
+    }
     assert body["date"] == body["weather"]["date"]
     assert len(body["outfits"]) <= 3
+    assert body["source"] == "rules"
+    assert body["attempts"] == 0
 
     for outfit in body["outfits"]:
         assert outfit["reason"]

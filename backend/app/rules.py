@@ -138,6 +138,17 @@ def _usable(item: RuleItem, occasion: str | None) -> bool:
     return not item.occasion or item.occasion == occasion
 
 
+def filter_usable(items: list[RuleItem], occasion: str | None) -> list[RuleItem]:
+    return [item for item in items if _usable(item, occasion)]
+
+
+def rank_items(
+    items: list[RuleItem], target_warmth: int, target_formality: int
+) -> list[RuleItem]:
+    """按 (厚薄距离, 正式度距离, id) 排序。规则与 LLM 候选池共用这一处。"""
+    return sorted(items, key=lambda item: _item_key(item, target_warmth, target_formality))
+
+
 def _decorate(
     base: list[RuleItem],
     *,

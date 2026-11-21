@@ -464,9 +464,7 @@ DIFF_SPREAD=9      DIFF_FEELS_MIN=18
 | 后端测试 | 81 passed（74 + 搭配 7） |
 | 前端 | 23 passed / typecheck 0 / build 0（271KB，gzip 84KB） |
 
-**未执行**：浏览器里真点「就穿这套」。沙箱起不了浏览器，所以按「前端会发的请求」原样发了一遍 HTTP 并查了库——按钮禁用与 toast 属于纯 UI 行为，仍需你点一次确认。
-
-验收期间真的落了一条记录：`outfits.id=1`、`worn_on=2026-11-21`、5 件单品、note「规则推荐 · casual」。不想留可以直接 SQL 删，或者告诉我处理。
+**未执行**：浏览器里真点「就穿这套」。沙箱起不了浏览器，所以按「前端会发的请求」原样发了一遍 HTTP 并查了库——按钮禁用与 toast 属于纯 UI 行为，仍需你点一次确认。验收期间真的落了一条记录：`outfits.id=1`、`worn_on=2026-11-21`、5 件单品、note「规则推荐 · casual」。不想留可以直接 SQL 删，或者告诉我处理。
 
 ### N3b 收尾
 
@@ -474,6 +472,89 @@ DIFF_SPREAD=9      DIFF_FEELS_MIN=18
 - 用接口（不是改库）删掉了测试搭配：库里当时有 4 条（id 1–4，比你提的 3 条多一条），全部 `DELETE` 返回 204；删后 `GET /api/outfits` → `total=0`、`wear_log` → 0 行、`outfit_items` 17 行原样保留（软删语义）。
 - 搭配页天气条右下角加了一行 `数据来源 Open-Meteo`（`text-[10px] text-black/25`），Open-Meteo 的署名要求现在页面上也满足了，不只在 README。
 - README 顶部改成「W1 完成 · W2 完成 · W3 进行中」，已补的缺口（Alembic、孤儿图、图库删除 UI）划掉并注明补法。
+
+## 24. N4：LLM 适配层 + 候选集校验（2026-11-21）
+
+### 客户端（`app/llm.py`）
+
+- 默认 `deepseek-chat` + `https://api.deepseek.com`（**不带 `/v1`**，实测这个路径 200），请求路径 `/chat/completions`；`EW_LLM_MODEL` / `EW_LLM_BASE_URL` 可覆盖。本账户可用 `deepseek-chat` 与 `deepseek-v4-pro`。
+- **为什么用 chat 不用 flash**：flash 是推理模型，每次多烧 100–170 个 reasoning token、1.2–1.5s；chat 实测 735ms、6 completion tokens，同样支持 `response_format=json_object`。选衣这种小任务用 chat 更省更快。
+- `max_tokens` 默认 800（`EW_LLM_MAX_TOKENS` 可配）。**这两个模型带 reasoning tokens**：实测 `max_tokens=30` 时返回 `content=""` 且 `finish_reason="length"`，预算全花在推理上。所以解析前先判：`finish_reason == "length"` 或 `content` 为空 → `LLMError("truncated")`，走修复/降级，**不去 `json.loads("")`**。
+- `response_format: json_object` 实测支持；仍保留 ```json 围栏剥离作为容错。响应里的 `reasoning_content` 一律忽略，只解析 `content`。
+- OpenAI 兼容的 `POST {base_url}/chat/completions`，`temperature=0`；上游 400 且抱怨 `response_format` 时去掉它重试一次。
+- 所有失败折成 `LLMError.reason`：`timeout` / `network` / `rate_limited` / `upstream_5xx` / `http_4xx` / `bad_json` / `bad_structure` / `truncated`。
+- key 不做全局单例：`resolve_llm_config(header_key)` 先看 `X-LLM-Key`，再看 `EW_LLM_KEY`，都没有返回 `None`（走规则，不算错误）。
+- 预期延迟：flash 约 1.2–1.5s/次、约 200 tokens/次。日志里已有 `elapsed_ms`，N6 前端按这个做 loading 态。
+
+### 候选池与校验（`app/llm_pick.py`）
+
+- 池子复用规则同一套排序（`rules.rank_items`），每类截前几件：top 4 / bottom 3 / shoes 3 / outer 3（仅需外套时）/ accessory 2，总数 10–15。
+- **校验才是重点**，不是 prompt：prompt 里写「只能从给定 id 中选」只是提示，真正拦住幻觉的是四条硬校验——整数数组、长度 3–6、id 全在池内、不重复、品类齐全（top 或 dress / bottom 或 dress / shoes，需外套时还要 outer）。
+- 校验失败把「哪些 id 非法、缺了哪类」原样回灌，让模型重出一次；第二次仍失败降级规则，`fallback_reason=invalid_ids|invalid_outfit`，不抛异常。
+- **池子里没有的品类不要求模型选**：衣橱没外套时 `want_outer` 自动降级为 false；连 top/bottom/shoes 都凑不齐就直接 `missing_category` 降级，不浪费一次调用。（这个坑是测试跑出来的：规则结果没有外套，校验却要求外套，导致永远降级并多打一次模型。）
+
+### 接口（`app/routers/recommend.py`）
+
+- `mode=rules`（默认）不变；`mode=llm` 时只**替换第一套**，后两套仍是规则结果，响应带 `source` / `attempts` / `fallback_reason`。
+- 没 key → `fallback_reason=no_key`，完全不调用上游；模型失败 → 整套退回规则 3 套。**模型问题永远 200**；天气 502 仍照常往上抛（那是另一回事）。
+- 日志只有 `mode / source / attempts / fallback / elapsed_ms / key 指纹`，不记明文 key、不记 prompt、不记响应体。指纹是 sha256 前 8 位。
+
+### 测试
+
+`backend/tests/test_llm.py` 30 条，全部 mock httpx：
+
+| 覆盖 | 断言 |
+|---|---|
+| 正常 | `source=llm`、`attempts=1`、outfit/reason 正确 |
+| 幻觉一次 | 第二次合法 → `source=llm`、`attempts=2`，且第二次 prompt 里带了「候选池」错误 |
+| 幻觉两次 | `source=rules`、`fallback_reason=invalid_ids`、仍有规则结果 |
+| 重复 id / 长度 2 / 长度 8 / 缺下装 / 缺外套 / 非整数 | 各自判失败并给出对应问题 |
+| 429 / 超时 / 非 JSON / 结构不对 | 降级且 reason 正确 |
+| **截断**（`content=""` + `finish_reason=length`） | `LLMError("truncated")`；接口层降级为规则，200，`fallback_reason=truncated` |
+| 空正文但没标 length | 同样按 `truncated` 处理 |
+| payload | `model=deepseek-chat`、`max_tokens=800`、`temperature=0`、`response_format=json_object` |
+| `reasoning_content` | 有它也不影响，只解析 `content` |
+| 默认配置 | 不带 `/v1` 的 base_url、flash 模型、800 预算；`EW_LLM_MODEL` / `EW_LLM_MAX_TOKENS` 可改 |
+| 无 key | 走规则，`chat_calls == 0` |
+| 日志 | caplog 里没有明文 key，有指纹 |
+
+`pytest.ini` 新增（`asyncio_mode=auto`），`requirements-dev.txt` 加 `pytest-asyncio`——测试里要用 async，不想让每个用例手写事件循环。
+
+全量：**121 passed**（84 + 37）。
+
+**顺带修的一个统计 bug**：`attempts` 原来在 LLMError 分支返回 `attempt - 1`，第一次就失败时显示 0 次——明明已经调过一次。改成返回实际调用次数。
+
+### 候选池漏 dressing：LLM 路径比规则更严格（N4 修正）
+
+**现象**：`mode=llm&occasion=formal` 直接 `source=rules`、`attempts=0`、`fallback_reason=missing_category`，模型一次都没被调用。而规则层能给 formal 出裙装方案。
+
+**原因**：`POOL_SIZES` 里只有 top/bottom/shoes/outer/accessory，**没有 dress**。formal 衣橱按场合筛完是 top 18 / outer 6 / shoes 2 / dress 2 / bottom 0，池子里既没下装也没连衣裙，而校验要求「bottom 或 dress」→ 永远不满足 → 提前降级。
+
+**修法**：
+
+1. `POOL_SIZES` 加 `"dress": 2`。
+2. `missing_category` 的判定只按池子里**实际有的**品类算：需要 (top 或 dress) 且 (bottom 或 dress) 且 shoes；天冷时还要池里有 outer。缺任何一项才跳过模型。
+3. 补两条测试：只有 dress+shoes 的衣橱必须调用模型；formal 形态（bottom=0、dress=2）不再 `missing_category`。
+
+**验证**（真实衣橱 + 假上游，四个场合一遍）：
+
+```
+formal  ids=[2, 21, 10, 14]       -> source=llm attempts=1 fallback=None
+casual  ids=[1, 17, 19, 16, 5]    -> source=llm attempts=1 fallback=None
+work    ids=[13, 18, 32]          -> source=llm attempts=1 fallback=None
+sport   ids=[9, 34, 3]            -> source=llm attempts=1 fallback=None
+```
+
+全量 **124 passed**（121 + 3）。
+
+**教训**：候选池的品类清单和校验的必备品类必须成对维护——池子少一类，校验就会要求一个模型永远选不出来的东西，而且表现为「静默降级」，不看日志根本发现不了。
+
+### 未执行
+
+想在 8001 上跑一次真实降级链（无 key / 无效 key 各一次），但 Open-Meteo 这时又连不上（`ConnectTimeout`），`/api/recommend` 在天气那一步就 502 了，到不了 LLM。所以：
+
+- 无 key、模型失败、修复、日志不含明文 key **都有 mock 到路由层**的用例兜着；
+- **真实上游 + 真实 key 的组合没有跑过**，等 N5 接指标落库时一并补。
 
 ### 顺带发现的环境问题
 
