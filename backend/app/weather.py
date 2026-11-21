@@ -8,6 +8,7 @@ Open-Meteo 会把坐标吸附到网格（传 30.2741 可能返回 30.263618）�
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from dataclasses import dataclass
@@ -22,6 +23,8 @@ logger = logging.getLogger(__name__)
 
 API_URL = "https://api.open-meteo.com/v1/forecast"
 TIMEOUT_SECONDS = 5.0
+# TLS 握手偶发超时：重试一次，间隔半秒
+RETRY_DELAY_SECONDS = 0.5
 CACHE_TTL_SECONDS = 2 * 60 * 60  # 2 小时，写死
 
 # 双模型取数：CMA（中国气象局）更贴合国内实况，但不提供降水概率和 UV，
@@ -176,15 +179,35 @@ def _parse(city: City, date: str, payload: dict) -> WeatherSnapshot:
     )
 
 
-async def fetch_daily(city: City, date: str) -> WeatherSnapshot:
-    """打一次上游。任何失败都折成 UpstreamError，不把半截数据带出去。"""
-    try:
-        async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
-            response = await client.get(API_URL, params=_params(city))
-    except httpx.HTTPError as exc:
-        raise UpstreamError(f"请求天气服务失败：{exc.__class__.__name__}") from exc
+async def _fetch_once(city: City) -> httpx.Response:
+    async with httpx.AsyncClient(timeout=TIMEOUT_SECONDS) as client:
+        return await client.get(API_URL, params=_params(city))
 
+
+async def fetch_daily(city: City, date: str) -> WeatherSnapshot:
+    """打上游，超时类失败重试一次；HTTP 错误不重试。
+
+    背景：api.open-meteo.com 在本机会间歇性 TLS 握手超时（TCP 能连、TLS 20s 超时），
+    单次失败就 502 会让整页不可用，所以对超时做一次短重试。
+    """
+    response: httpx.Response | None = None
+    for attempt in (1, 2):
+        try:
+            response = await _fetch_once(city)
+            break
+        except httpx.TimeoutException as exc:
+            if attempt == 1:
+                logger.warning("weather retry city=%s attempt=2", city.name)
+                await asyncio.sleep(RETRY_DELAY_SECONDS)
+                continue
+            raise UpstreamError(f"请求天气服务超时：{exc.__class__.__name__}") from exc
+        except httpx.HTTPError as exc:
+            # 连接被拒、DNS 失败这类不重试：换个时间也不会好，还多花一次请求
+            raise UpstreamError(f"请求天气服务失败：{exc.__class__.__name__}") from exc
+
+    assert response is not None
     if response.status_code != 200:
+        # 4xx/5xx 不重试：重试也没用
         raise UpstreamError(f"天气服务返回 HTTP {response.status_code}")
 
     try:

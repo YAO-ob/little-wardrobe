@@ -87,7 +87,7 @@ python -m alembic upgrade head
 | PATCH | `/api/items/{id}` | 局部更新（补颜色/品牌/价格等选填字段） |
 | DELETE | `/api/items/{id}` | 软删除 |
 | GET | `/api/weather?city=杭州` | 今天的日预报。温度取 CMA（更贴合国内实况），降水概率/UV/天气码取 best_match；返回含 `weather_code` 与中文 `weather_text`。不传 city 用杭州；城市不在内置表里 → 400；上游失败有旧数据 → 200 + `stale=true`；无旧数据 → 502 |
-| GET | `/api/recommend?occasion=casual&city=杭州&mode=llm` | 规则候选：用天气 + 衣橱组 3 套搭配。`mode=rules`（默认）纯规则；`mode=llm` 时从规则候选里挑一套替换第一套，需要 `X-LLM-Key` 请求头或 `EW_LLM_KEY` 环境变量；模型出错自动降级回规则，永远 200 |
+| GET | `/api/recommend?occasion=casual&city=杭州&mode=llm` | 规则候选：用天气 + 衣橱组 3 套搭配。`mode=rules`（默认）纯规则；`mode=llm` 时从规则候选里挑一套替换第一套，需要 `X-LLM-Key` 请求头或 `EW_LLM_KEY` 环境变量。模型成功结果缓存 30 分钟（`cached=true`）；按 IP 限流 10 次/分钟，超限返回 `source=rules` + `rate_limited`，永远 200 |
 | POST | `/api/outfits` | 保存一套「今天穿这套」：`{item_ids, weather?, note?}` → 写 `outfits` + `outfit_items`（layer 由品类推导）。同一套重复提交会生成新记录，不去重 |
 | GET | `/api/outfits?limit=20` | 最近保存的搭配，带每套的 item_ids |
 

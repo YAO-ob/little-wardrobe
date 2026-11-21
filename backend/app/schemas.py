@@ -143,6 +143,10 @@ class RecommendOut(BaseModel):
         default=None,
         description="降级原因：no_key / timeout / rate_limited / upstream_5xx / bad_json / invalid_ids …",
     )
+    cached: bool = Field(
+        default=False,
+        description="true = 命中推荐结果缓存（只缓存模型成功的结果，30 分钟）",
+    )
 
 
 class WeatherSnapshotIn(BaseModel):

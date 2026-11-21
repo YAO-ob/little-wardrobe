@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import logging
+
 import httpx
 import pytest
 
@@ -57,6 +59,8 @@ class FakeClient:
     calls = 0
     response: FakeResponse | None = None
     error: Exception | None = None
+    # 按顺序消费：元素是异常就抛，是响应就返回；空了回落到 error/response
+    queue: list[object] = []
 
     def __init__(self, *args, **kwargs) -> None:
         pass
@@ -69,6 +73,11 @@ class FakeClient:
 
     async def get(self, url, params=None):
         FakeClient.calls += 1
+        if FakeClient.queue:
+            item = FakeClient.queue.pop(0)
+            if isinstance(item, Exception):
+                raise item
+            return item
         if FakeClient.error is not None:
             raise FakeClient.error
         assert FakeClient.response is not None
@@ -81,7 +90,10 @@ def fake_http(monkeypatch):
     FakeClient.calls = 0
     FakeClient.response = FakeResponse(UPSTREAM_OK)
     FakeClient.error = None
+    FakeClient.queue = []
     monkeypatch.setattr(weather.httpx, "AsyncClient", FakeClient)
+    # 重试间隔归零，测试不要真的睡
+    monkeypatch.setattr(weather, "RETRY_DELAY_SECONDS", 0)
     yield FakeClient
     weather.clear_cache()
 
@@ -193,6 +205,52 @@ def test_unknown_city_returns_400(client):
     res = client.get("/api/weather", params={"city": "瞎编城市"})
     assert res.status_code == 400
     assert "瞎编城市" in res.json()["detail"]
+
+
+# --- 超时重试（N5b） ------------------------------------------------------
+
+
+def test_timeout_then_success_retries_once(client, fake_http, caplog):
+    fake_http.queue = [httpx.ConnectTimeout("boom"), FakeResponse(UPSTREAM_OK)]
+
+    with caplog.at_level(logging.WARNING):
+        res = client.get("/api/weather", params={"city": "杭州"})
+
+    assert res.status_code == 200
+    assert res.json()["cached"] is False
+    assert res.json()["city"] == "杭州"
+    assert fake_http.calls == 2
+    assert "weather retry city=杭州 attempt=2" in "\n".join(
+        record.getMessage() for record in caplog.records
+    )
+
+
+def test_two_timeouts_return_502(client, fake_http):
+    fake_http.queue = [httpx.ConnectTimeout("boom"), httpx.ReadTimeout("again")]
+
+    res = client.get("/api/weather", params={"city": "杭州"})
+
+    assert res.status_code == 502
+    assert res.json()["detail"]["code"] == "weather_upstream_failed"
+    assert fake_http.calls == 2
+
+
+def test_http_400_is_not_retried(client, fake_http):
+    fake_http.queue = [FakeResponse(status_code=400)]
+
+    res = client.get("/api/weather", params={"city": "杭州"})
+
+    assert res.status_code == 502
+    assert fake_http.calls == 1
+
+
+def test_http_500_is_not_retried(client, fake_http):
+    fake_http.queue = [FakeResponse(status_code=500)]
+
+    res = client.get("/api/weather", params={"city": "杭州"})
+
+    assert res.status_code == 502
+    assert fake_http.calls == 1
 
 
 def test_upstream_failure_with_cache_returns_stale(client, fake_http, monkeypatch):
@@ -317,6 +375,7 @@ def test_recommend_endpoint_shape(client, fake_http):
         "source",
         "attempts",
         "fallback_reason",
+        "cached",
     }
     assert body["date"] == body["weather"]["date"]
     assert len(body["outfits"]) <= 3

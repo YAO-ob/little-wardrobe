@@ -549,6 +549,75 @@ sport   ids=[9, 34, 3]            -> source=llm attempts=1 fallback=None
 
 **教训**：候选池的品类清单和校验的必备品类必须成对维护——池子少一类，校验就会要求一个模型永远选不出来的东西，而且表现为「静默降级」，不看日志根本发现不了。
 
+## 25. N5：推荐结果缓存 + 限流（2026-11-21）
+
+### 缓存（`app/llm_cache.py`）
+
+- key = `(date, occasion or "", weather_hash, wardrobe_hash, mode)`：
+  - `weather_hash`：`t_min / t_max / feels_min / feels_max / precip_prob / weather_code` 拼起来 sha256 前 12 位；
+  - `wardrobe_hash`：未删单品的 `id:updated_at` 拼起来 sha256 前 12 位——改任何一件衣服都会失效，这是有意的。
+- **只缓存 `source="llm"` 的成功结果**。降级结果（rules / timeout / invalid_ids / rate_limited）绝不入缓存，否则一次抽风会被钉住半小时。日志里有 `llm_cache skip=fallback reason=…` 便于确认。
+- TTL 30 分钟（`EW_LLM_CACHE_TTL`），进程内 dict，上限 200 条，超了按写入时间淘汰最旧。命中返回 `cached=true`。
+- 天气服务自己还有一层 2 小时快照缓存；两层互不影响，但测试「换天气」时记得清天气缓存，否则取的还是旧快照。
+
+### 限流（`app/limits.py`）
+
+- 只对「mode=llm 且真的要调模型」计数：命中缓存不计、mode=rules 不计。
+- 滑动窗口 60 秒，按客户端 IP（`X-Forwarded-For` 优先，取第一个值；否则 `request.client.host`），默认 10 次/分钟（`EW_LLM_RATE_LIMIT_PER_MIN`）。
+- **超限不返回 429**：200 + `source=rules` + `fallback_reason=rate_limited` + `notice`「请求太频繁，当前展示的是规则推荐」，响应头带 `X-RateLimit-Remaining`（超限时为 0）。原则是这个应用不该因为自己的限制把页面搞挂。
+- 每次调用会 prune 当前 key 的过期窗口；bucket 总数超过 500 时顺手清理空窗口，避免 dict 无限增长。
+
+### 局限（写清楚，别假装没有）
+
+- 缓存与计数都是**进程内**的：单进程 uvicorn 够用；一旦开多 worker 或上多实例，每个进程各一份，命中率和限流都是「每进程」口径。要共享得换 Redis，N5 不做。
+- 限流按 IP，同一台机器上的多个浏览器/标签页共享额度；NAT 后面的人会互相影响。
+- `X-Forwarded-For` 可伪造，只有放在可信反代后面才有意义。
+
+### 测试
+
+`backend/tests/test_llm.py` 新增 9 条（全 132 passed，跑了两遍确认不依赖顺序/DB 残留）：
+
+| 场景 | 断言 |
+|---|---|
+| 同请求两次 | 第二次 `cached=true`，上游只调 1 次 |
+| 改一件单品 | `updated_at` 变 → 缓存失效，上游再调 1 次 |
+| 换 occasion / 换天气 | key 不同；换回原场合仍命中旧缓存 |
+| 降级不缓存 | 第一次 429 降级，第二次仍会调上游并成功 |
+| 限流 | 上限 2，第 3 次 → 200 + rules + rate_limited + `X-RateLimit-Remaining: 0`，上游调用停在 2 |
+| 命中不占额度 | 上限 2 时，命中一次后仍能再调一次真实模型 |
+| mode=rules | 不碰缓存、不碰限流 |
+
+### 踩到的测试坑
+
+`_ensure_wardrobe` 原来只按「品类是否存在」补数据，但业务上按场合过滤：衣橱里 top 全是 `work` 时，`occasion=casual` 依然组不出搭配。改成保证每类都有**一件 occasion 为空**的单品（任何场合都可用），顺便避免补数据导致 `wardrobe_hash` 中途变化、把缓存测试搞成玄学。
+
+## 26. N5b：天气请求超时重试（2026-11-21）
+
+### 背景
+
+`api.open-meteo.com` 在本机**间歇性 TLS 握手超时**：TCP 283ms 能连，TLS 有时 20 秒超时、有时 591ms 成功。原来单次失败就 502，重启撞上这个窗口整页不可用。
+
+### 改法（只动 `weather.py`）
+
+- `fetch_daily` 里对 **`httpx.TimeoutException`**（含 ConnectTimeout / ReadTimeout / 池超时）重试 1 次，间隔 `RETRY_DELAY_SECONDS=0.5`。
+- **HTTP 4xx/5xx 不重试**：重试也不会变好，还多花一次请求。
+- **其他连接类错误（DNS 失败、连接被拒）也不重试**：换时间不会好，属于配置/网络问题，让它快速失败。
+- 重试日志：`weather retry city=杭州 attempt=2`；两次都失败才抛 `UpstreamError`，接口照旧 502。
+- 测试里把 `RETRY_DELAY_SECONDS` patch 成 0，避免真睡。
+
+### 验证
+
+- 单测 4 条：第一次超时第二次成功（200、`cached=false`、上游调用 2 次、日志含 retry）；两次超时 → 502 且 2 次调用；HTTP 400 → 502 且**只调 1 次**；HTTP 500 → 同上。
+- 手动：把 `API_URL` 指到不可路由地址 `https://10.255.255.1`，日志出现一次 `weather retry city=杭州 attempt=2`，耗时 2.3s 后 `UpstreamError`——确认「两次尝试」真的发生。
+- 真实上游当前可达时：一次成功（976ms，杭州 6.8–14.6，未触发重试）。
+
+全量 **136 passed**。
+
+### 局限
+
+- 只重试超时，且只重试一次；TLS 若持续抽风仍会 502。
+- **没有持久化「上次成功的天气」**：进程重启后无缓存可用，冷启动撞上不可用窗口就是 502。这条留给 W4 部署阶段（需要新表或落盘文件），本轮按范围不做。
+
 ### 未执行
 
 想在 8001 上跑一次真实降级链（无 key / 无效 key 各一次），但 Open-Meteo 这时又连不上（`ConnectTimeout`），`/api/recommend` 在天气那一步就 502 了，到不了 LLM。所以：

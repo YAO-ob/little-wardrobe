@@ -8,7 +8,7 @@ import logging
 import httpx
 import pytest
 
-from app import llm, llm_pick
+from app import limits, llm, llm_cache, llm_pick, weather
 from app.llm import LLMConfig, LLMError, chat_json, key_fingerprint, resolve_llm_config
 from app.llm_pick import PickResult, build_pool, validate_selection
 from app.rules import RuleItem, WeatherFacts
@@ -54,6 +54,7 @@ class FakeClient:
     chat_queue: list[object] = []
     chat_calls = 0
     weather_calls = 0
+    weather_override: dict | None = None
     last_headers: dict | None = None
     last_payload: dict | None = None
 
@@ -68,7 +69,7 @@ class FakeClient:
 
     async def get(self, url, params=None):
         FakeClient.weather_calls += 1
-        return FakeResponse({"daily": WEATHER_DAILY})
+        return FakeResponse(FakeClient.weather_override or {"daily": WEATHER_DAILY})
 
     async def post(self, url, json=None, headers=None):
         FakeClient.chat_calls += 1
@@ -99,10 +100,15 @@ def fake_http(monkeypatch):
     FakeClient.chat_queue = []
     FakeClient.chat_calls = 0
     FakeClient.weather_calls = 0
+    FakeClient.weather_override = None
     FakeClient.last_headers = None
     FakeClient.last_payload = None
     monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
     monkeypatch.delenv("EW_LLM_KEY", raising=False)
+    monkeypatch.delenv("EW_LLM_CACHE_TTL", raising=False)
+    monkeypatch.delenv("EW_LLM_RATE_LIMIT_PER_MIN", raising=False)
+    llm_cache.clear()
+    limits.clear()
     yield FakeClient
 
 
@@ -432,11 +438,12 @@ async def test_pick_falls_back_on_timeout():
 
 
 def _ensure_wardrobe(client) -> dict:
-    """保证四类基础件都在——否则冷天会因「池里没外套」直接 missing_category。"""
+    """保证四类基础件各有一件「场合为空」的单品（任何场合都可用），
+    这样后续请求不会因为补数据而改变 wardrobe_hash。"""
     items = client.get("/api/items", params={"limit": 500}).json()["items"]
-    categories = {item["category"] for item in items}
+    neutral = {item["category"] for item in items if not item["occasion"]}
     for category in ("top", "bottom", "shoes", "outer"):
-        if category not in categories:
+        if category not in neutral:
             client.post("/api/items", json={"category": category})
     return client.get("/api/recommend", params={"mode": "rules"}).json()
 
@@ -523,3 +530,181 @@ def test_logs_do_not_contain_plaintext_key(client, caplog):
     assert "sk-very-secret-key" not in text
     assert "llm_pick" in text
     assert key_fingerprint("sk-very-secret-key") in text
+
+
+# --- N5：缓存与限流 -------------------------------------------------------
+
+HEADERS = {"X-LLM-Key": "sk-test-secret"}
+
+
+def _valid_reply(client, occasion: str = "casual") -> FakeResponse:
+    _ensure_wardrobe(client)
+    baseline = client.get(
+        "/api/recommend", params={"mode": "rules", "occasion": occasion}
+    ).json()
+    ids = [item["id"] for item in baseline["outfits"][0]["items"]]
+    return reply({"item_ids": ids, "reason": f"模型选的 {occasion}"})
+
+
+def test_cache_hit_second_request_does_not_call_upstream(client):
+    _ensure_wardrobe(client)
+    FakeClient.chat_queue = [_valid_reply(client)]
+
+    first = client.get(
+        "/api/recommend", params={"mode": "llm"}, headers=HEADERS
+    ).json()
+    second = client.get(
+        "/api/recommend", params={"mode": "llm"}, headers=HEADERS
+    ).json()
+
+    assert first["cached"] is False
+    assert second["cached"] is True
+    assert FakeClient.chat_calls == 1
+    assert second["source"] == "llm"
+    assert second["outfits"][0]["reason"] == first["outfits"][0]["reason"]
+
+
+def test_cache_invalidated_when_item_changes(client):
+    import time as time_module
+
+    _ensure_wardrobe(client)
+    FakeClient.chat_queue = [_valid_reply(client)]
+    client.get("/api/recommend", params={"mode": "llm"}, headers=HEADERS)
+
+    items = client.get("/api/items", params={"limit": 1}).json()["items"]
+    target = items[0]
+    time_module.sleep(1.05)  # updated_at 是秒级精度，保证真的变了
+    client.patch(f"/api/items/{target['id']}", json={"color_family": "藏青"})
+
+    FakeClient.chat_queue = [_valid_reply(client)]
+    second = client.get(
+        "/api/recommend", params={"mode": "llm"}, headers=HEADERS
+    ).json()
+
+    assert second["cached"] is False
+    assert FakeClient.chat_calls == 2
+
+
+def test_cache_is_keyed_by_occasion(client):
+    _ensure_wardrobe(client)
+    FakeClient.chat_queue = [_valid_reply(client, "casual")]
+    client.get("/api/recommend", params={"mode": "llm", "occasion": "casual"}, headers=HEADERS)
+
+    FakeClient.chat_queue = [_valid_reply(client, "work")]
+    client.get("/api/recommend", params={"mode": "llm", "occasion": "work"}, headers=HEADERS)
+
+    # 回到 casual：应该命中第一次的缓存
+    third = client.get(
+        "/api/recommend", params={"mode": "llm", "occasion": "casual"}, headers=HEADERS
+    ).json()
+
+    assert FakeClient.chat_calls == 2
+    assert third["cached"] is True
+
+
+def test_cache_is_keyed_by_weather(client):
+    _ensure_wardrobe(client)
+    FakeClient.chat_queue = [_valid_reply(client)]
+    client.get("/api/recommend", params={"mode": "llm"}, headers=HEADERS)
+
+    # 换一份天气（体感不同 → weather_hash 变）。
+    # 天气服务自己有 2 小时快照缓存，这里要清掉才会真的重新取数
+    weather.clear_cache()
+    FakeClient.weather_override = {
+        "daily": {
+            **WEATHER_DAILY,
+            "apparent_temperature_min_cma_grapes_global": [1.0],
+            "apparent_temperature_max_cma_grapes_global": [8.0],
+        }
+    }
+    FakeClient.chat_queue = [_valid_reply(client)]
+    second = client.get(
+        "/api/recommend", params={"mode": "llm"}, headers=HEADERS
+    ).json()
+
+    assert second["cached"] is False
+    assert FakeClient.chat_calls == 2
+
+
+def test_fallback_result_is_not_cached(client):
+    _ensure_wardrobe(client)
+    FakeClient.chat_queue = [FakeResponse(status_code=429)]
+
+    first = client.get(
+        "/api/recommend", params={"mode": "llm"}, headers=HEADERS
+    ).json()
+    assert first["source"] == "rules"
+    assert first["fallback_reason"] == "rate_limited"
+
+    FakeClient.chat_queue = [_valid_reply(client)]
+    second = client.get(
+        "/api/recommend", params={"mode": "llm"}, headers=HEADERS
+    ).json()
+
+    assert second["cached"] is False
+    assert FakeClient.chat_calls == 2
+    assert second["source"] == "llm"
+
+
+def test_rate_limit_falls_back_to_rules_with_200(client, monkeypatch):
+    monkeypatch.setenv("EW_LLM_RATE_LIMIT_PER_MIN", "2")
+    _ensure_wardrobe(client)
+
+    FakeClient.chat_queue = [_valid_reply(client, "casual")]
+    client.get("/api/recommend", params={"mode": "llm", "occasion": "casual"}, headers=HEADERS)
+
+    FakeClient.chat_queue = [_valid_reply(client, "work")]
+    client.get("/api/recommend", params={"mode": "llm", "occasion": "work"}, headers=HEADERS)
+
+    FakeClient.chat_queue = [_valid_reply(client, "sport")]
+    res = client.get(
+        "/api/recommend", params={"mode": "llm", "occasion": "sport"}, headers=HEADERS
+    )
+    body = res.json()
+
+    assert res.status_code == 200
+    assert body["source"] == "rules"
+    assert body["fallback_reason"] == "rate_limited"
+    assert "规则推荐" in (body["notice"] or "")
+    assert res.headers["X-RateLimit-Remaining"] == "0"
+    assert FakeClient.chat_calls == 2  # 第三次没有打上游
+
+
+def test_cache_hit_does_not_consume_quota(client, monkeypatch):
+    monkeypatch.setenv("EW_LLM_RATE_LIMIT_PER_MIN", "2")
+    _ensure_wardrobe(client)
+
+    FakeClient.chat_queue = [_valid_reply(client, "casual")]
+    first = client.get(
+        "/api/recommend", params={"mode": "llm", "occasion": "casual"}, headers=HEADERS
+    ).json()
+    assert first["cached"] is False
+
+    # 第二次命中缓存，不消耗额度
+    hit = client.get(
+        "/api/recommend", params={"mode": "llm", "occasion": "casual"}, headers=HEADERS
+    ).json()
+    assert hit["cached"] is True
+
+    # 额度还剩 1 次：work 应该放行
+    FakeClient.chat_queue = [_valid_reply(client, "work")]
+    work = client.get(
+        "/api/recommend", params={"mode": "llm", "occasion": "work"}, headers=HEADERS
+    ).json()
+    assert work["source"] == "llm"
+    assert work["fallback_reason"] is None
+
+    # 第三次真实调用被限流
+    FakeClient.chat_queue = [_valid_reply(client, "sport")]
+    sport = client.get(
+        "/api/recommend", params={"mode": "llm", "occasion": "sport"}, headers=HEADERS
+    ).json()
+    assert sport["fallback_reason"] == "rate_limited"
+
+
+def test_rules_mode_never_touches_cache_or_limiter(client):
+    _ensure_wardrobe(client)
+    body = client.get("/api/recommend", params={"mode": "rules"}).json()
+    assert body["cached"] is False
+    assert FakeClient.chat_calls == 0
+    assert llm_cache.size() == 0
