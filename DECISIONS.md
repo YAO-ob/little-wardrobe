@@ -685,7 +685,7 @@ after : total_calls=20, fallbacks=20, fallback_by_reason={"no_key": 20},
 
 **修法**：
 
-1. `by_model` 加 `attempts > 0`：只统计真的发起了模型调用的请求。现在 `by_model` 的合计 == `llm_success`。
+1. `by_model` 加 `attempts > 0`：只统计真的发起了模型调用的请求。**注意 `by_model` ≠ `llm_success`**：一次调用失败（比如 `http_401`）也计入了 `by_model`，但不计入成功数——两个数字在「有失败调用」时本来就会差 1，差值正好等于「尝试了但失败」的次数。
 2. 新增 `model_latency_ms`（avg/p50/p95），只统计 `attempts > 0` 的行——**对外报延迟用这个**。原来的 `latency_ms` 保留为「请求级耗时」（含缓存命中、限流这些 2ms 的快速请求，会把平均值拉得很低，不适合当模型延迟）。两个字段的注释都写清了。
 3. `tokens` 注明只累加非空值：降级请求记 `None`，不会被当成 0。
 
