@@ -98,6 +98,10 @@ PowerShell 的 `Get-Content`/`Set-Content` 在这台机器上会按 GBK 读写�
 
 **什么时候改**：换到能签名的机器或 CI，删掉 `dev.cmd` 直接用 `pwsh -File scripts\dev.ps1`。
 
+**局域网模式（W4e）**：`.\dev.cmd -Lan` 只把**前端**放到 `0.0.0.0`（`vite --host`），uvicorn 仍监听 `127.0.0.1`。理由：手机访问 5173，vite 的 proxy 在 dev server 内部转发 `/api`、`/media`，所以 8000（含 `/docs` 和所有写接口）不需要暴露给同 WiFi 的其他人，暴露面只有只读页面本身。
+
+**坑**：`pnpm dev -- --host` 在 pnpm 11 下**不生效**——pnpm 把 `--` 原样传给脚本，vite 把它当成「参数结束」，`--host` 被忽略（实测仍只绑 127.0.0.1）。必须写 `pnpm dev --host`（不带分隔符）。`dev.ps1` 里已按后者实现并注释。
+
 ## 13. 本轮验收数据（W1）
 
 | 项 | 数字 |
@@ -792,5 +796,115 @@ latency_ms       = {"avg": 75.5,  "p50": 2,   "p95": 910}
 本机 8000 端口上跑的是**修正前**的进程（打 `city=杭州` 还回 `502 天气服务返回 HTTP 400`，和你看到的现象一致）。它由本会话之外的终端启动，当前沙箱会话对它 `Stop-Process`/`taskkill` 都返回「拒绝访问」，杀不掉，所以本轮真上游验证改在 **8001** 端口做。
 
 **你需要做的**：把那个 8000 的进程停掉再 `.\dev.cmd`，否则新代码不会生效——这是上一轮「改了没生效」的同类问题，只不过这次是进程而不是 dev server 缓存。
+
+## 29. W5a：手机端录入修复（HEIC / 拍照相册分离 / 错误文案）（2026-11-21）
+
+### 两个入口
+
+原来只有一个 `<input capture="environment" multiple>`：带 `capture` 时手机一律进相机，相册选不了；`capture` 与 `multiple` 同时存在的行为在各家浏览器也不一致。拆成两个 input：
+
+- 「📷 拍照」：`accept="image/*" capture="environment"`
+- 「🖼 从相册选」：`accept="image/*" multiple`
+
+两个共用同一个 `onPick()`（`addFiles` → 清 `value` → `blur` → 焦点交还容器），桌面浏览器忽略 `capture`，两个按钮都只是文件选择。
+
+### HEIC/HEIF
+
+- 装了 `pillow-heif`，`imaging.py` 在 Pillow 导入之后执行 `register_heif_opener()`；`ALLOWED_SUFFIXES` 增加 `.heic` / `.heif`。
+- 管线不变：`exif_transpose` → `convert("RGB")` → 重建图 → 双档 WebP。HEIC 的 10bit/多帧在 `convert("RGB")` 这一步统一，解不开就 `UnsupportedImage` → 415。
+- 415 的文案从「图片无法解析，可能已损坏」改成「图片无法解析，格式可能不受支持」——带上「格式」两个字，前端才能可靠地映射成 iPhone 提示（否则 `broken.heic` 这种场景匹配不上）。
+
+### 前端错误文案
+
+`core/uploadError.ts` 的 `uploadErrorMessage(status, detail)`：415 且 detail 含「格式」→ iPhone 设置提示；413 → 压缩到 12MB 提示；其他原样返回。`adapters/upload.ts` 调用它，组件不重复写映射。
+
+### 事故记录：`pip --upgrade` 把 Pillow 的 `.py` 删了
+
+装 `pillow-heif` 时用了 `pip install --upgrade --target backend\.pyenv`。`--upgrade` 会先删旧包再装新包，而 Pillow 的 `_imaging.cp312-win_amd64.pyd` 正被运行中的 API 进程锁着，删除失败 → **PIL 目录被删了一半**（只剩 `.pyd` 和 `.pyi`，`Image.py` 等 106 个文件没了），`from PIL import Image` 直接 ImportError。
+
+修法：用临时目录装一份同版本 `pillow==13.0.0`，只把缺失的 `.py` 回填进 `backend\.pyenv\PIL`，保留被锁的 `.pyd`（版本相同，二进制一致）。
+
+**教训**：在 `--target` 目录上永远不要用 `--upgrade`；装新包用 `--no-deps`，只补自己那一个。
+
+### 验收（已执行）
+
+| 项 | 结果 |
+|---|---|
+| 真实 HEIC 上传（带 EXIF orientation=6） | 201，输出 1000×1400（方向已校正），展示图/缩略图均 200 |
+| 坏 `.heic`（内容是文本） | 415，detail「图片无法解析，格式可能不受支持」，tmp 不留残file |
+| 原有 jpg/png 用例 | 不回退 |
+| 后端测试 | **149 passed**（146 + 3） |
+| 前端测试 | **41 passed**（38 + 3） |
+| typecheck / build | 0 / 0（280KB / gzip 87KB） |
+| 手机实机（a–d 里的 b、c） | **未执行**，需要你用手机在 Lan 模式下点一次 |
+
+## 30. W5b：选图后队列为空（2026-11-21）
+
+### 根因
+
+`onPick` 里先 `addFiles(event.target.files)` 传了 **FileList 活引用**，紧接着 `event.target.value = ''` 把 input 清空；而 `addFiles` 内部的 `Array.from(files)` 是在 `setDrafts` 的 updater 里才执行的——那时文件已经没了。桌面 Chrome 偶尔保留旧引用所以侥幸能过，iOS Safari 直接拿到空数组，表现为「确认选图后什么都没发生」。
+
+### 修法
+
+1. `onPick` 第一件事就是快照：`const picked = Array.from(input.files ?? [])`；之后才清 `value`、`blur`、把焦点交还容器。
+2. `addFiles` 签名从 `FileList | null` 改成 `File[]`，内部不再 `Array.from`。
+3. 纯逻辑抽到 `core/drafts.ts` 的 `appendDrafts(prev, files, make)`：空数组直接返回原数组（no-op），有文件则按顺序追加。这样这条边界能单测（React 组件在本机渲染不了，见第 17 节）。
+
+### 和原始指令的一处不同
+
+指令要求「先 `value = ''`，再兜底延迟读一次 `input.files`」。但 `value = ''` 会立刻清掉 FileList，兜底就永远读不到东西。所以实现成：**快照为空时先不清 value**，`blur` 后 150ms 再读一次；有结果才清并 `addFiles`，仍为空则清掉并 toast「没有取到图片，请再试一次」。成功路径的顺序与指令一致。
+
+### 验证
+
+| 项 | 结果 |
+|---|---|
+| 前端测试 | **44 passed**（41 + 3） |
+| typecheck / build | 0 / 0（280KB / gzip 87KB） |
+| dev server 返回的模块 | 已确认 `Array.from` 出现在 `.value = ""` 之前，且含 150ms 兜底与 toast 文案 |
+| 手机实机（拍照 → 回页面 → 队列出现 1 张） | **未执行**，需要你验 |
+
+### 二改：入口改成 `<label>` 原生激活（安卓 / 鸿蒙）
+
+**现象**：华为等安卓/鸿蒙浏览器上，点「拍照」「从相册选」确认后队列仍为空；桌面正常。
+
+**原因（推断）**：入口是 `<button onClick={() => inputRef.current?.click()}>`。程序化 `input.click()` 在部分 WebView / 厂商浏览器里会被判成「非用户手势」而静默失败——不弹选择器、不报错，表现就是点了没反应。
+
+**改法**：两个入口改成 `<label role="button" aria-label="…">` **包住真正的 input**，靠 label 的原生激活行为触发文件选择，完全不依赖 JS。input 用 `sr-only` 而不是 `display:none`，这样键盘 Tab 仍能聚焦到它。
+
+`onPick` 同时按「快照 → 清空 → blur → 焦点交还 → addFiles」重排（只有真拿到文件才清空，否则 155ms 兜底重读永远读不到东西）。150ms 兜底与空结果 toast 保留。
+
+**验证**：前端 44 passed / typecheck 0 / build 0；产物里有两个 label、两个 `sr-only` input，且不含任何 `ref.current.click()`。真机仍需用户验。
+
+## 31. W5c：手机端白屏（`crypto.randomUUID` 在非安全上下文不存在）（2026-11-21）
+
+### 根因
+
+`newDraft()` 用 `crypto.randomUUID()` 生成草稿 id。这个 API **只在安全上下文**（https / localhost）存在；手机通过 `http://<局域网IP>:5173` 访问时它是 `undefined`，调用直接抛 `TypeError`。组件没有 ErrorBoundary，异常冒到根节点 → **整页白屏，连报错都看不到**。桌面用 `localhost` 所以一直正常，这类问题只在真机上暴露。
+
+### 修法
+
+1. `core/drafts.ts` 加 `makeDraftId()`：优先 `crypto.randomUUID()`，否则退回 `d-<36进制时间戳>-<随机段>`。
+   **`crypto` 在函数里取，不在模块顶层读**——顶层读会让 SSR / 测试环境的差异变成加载期崩溃。
+2. 新增 `ui/components/ErrorBoundary.tsx`（class component，官方写法），在 `main.tsx` 里包住整个应用：显示「页面出错了」+ 错误信息（截断 200 字）+「重新加载」按钮。
+
+**为什么值得加 ErrorBoundary**：白屏会让用户以为是网络问题，然后去重启路由器、换手机、卸载重装——真正的错误信息一次都没露过面。把错误摊在页面上，至少能截图发给开发者。成本是一个 class component，收益是以后任何渲染期异常都有出路。
+
+### 局限
+
+- ErrorBoundary 只抓**渲染期**异常；事件回调、`setTimeout`、Promise 里的异常它抓不到（那些不会冒泡到 React 渲染）。
+- 它不会自动恢复：点「重新加载」是刷新整页，未保存的草稿会丢。
+- 没有上报通道，错误只在用户屏幕上和控制台里。
+
+### 验证
+
+| 项 | 结果 |
+|---|---|
+| 单测：`makeDraftId` 正常路径 | 36 字符、UUID 形态 |
+| 单测：`crypto` 存在但无 `randomUUID` | 仍返回，100 次不重复 |
+| 单测：`crypto` 完全不存在 | 不崩，返回非空 |
+| 前端测试 | **47 passed**（44 + 3） |
+| typecheck / build | 0 / 0（281KB / gzip 87KB） |
+| 产物 | 含「页面出错了」「重新加载」；`CapturePage` 里已无裸 `crypto.randomUUID` |
+| 手机实机 | **未执行**，需要你验 |
 
 

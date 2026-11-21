@@ -49,7 +49,9 @@ async def upload_image(
         result = process_upload(original, tmp_dir, stem)
     except UnsupportedImage as exc:
         original.unlink(missing_ok=True)
-        raise HTTPException(status_code=415, detail="图片无法解析，可能已损坏") from exc
+        raise HTTPException(
+            status_code=415, detail="图片无法解析，格式可能不受支持"
+        ) from exc
 
     display: Path = result["display"]  # type: ignore[assignment]
     thumb: Path = result["thumb"]  # type: ignore[assignment]

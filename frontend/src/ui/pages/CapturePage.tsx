@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import type { ChangeEvent, RefObject } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { createItem } from '../../core/api'
+import { appendDrafts, makeDraftId } from '../../core/drafts'
 import { CATEGORIES, OCCASIONS, WARMTHS } from '../../core/labels'
 import { isTextEntry, resolveShortcut } from '../../core/shortcuts'
 import type { Category, Occasion, Warmth } from '../../core/types'
@@ -19,7 +21,7 @@ interface Draft {
 
 function newDraft(file: File): Draft {
   return {
-    id: crypto.randomUUID(),
+    id: makeDraftId(),
     file,
     preview: createPreview(file),
     category: null,
@@ -30,10 +32,57 @@ function newDraft(file: File): Draft {
 
 /** 会吃掉字符键的「文本类」输入；file/button/checkbox 等一律不拦。 */
 
+interface CaptureEntryProps {
+  cameraRef: RefObject<HTMLInputElement | null>
+  albumRef: RefObject<HTMLInputElement | null>
+  onPick: (event: ChangeEvent<HTMLInputElement>) => void
+  compact?: boolean
+}
+
+/**
+ * 两个入口用 <label> 包住 input：靠 label 的原生行为激活文件选择。
+ * 不用 JS `input.click()`——部分安卓 WebView / 厂商浏览器会把它判成非用户手势而静默失败。
+ */
+function CaptureEntry({ cameraRef, albumRef, onPick, compact = false }: CaptureEntryProps) {
+  const base = compact
+    ? 'flex cursor-pointer items-center justify-center rounded-xl border border-black/10 bg-white px-3 py-3 text-sm text-black/70'
+    : 'flex aspect-square cursor-pointer flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-black/15 bg-white/60 text-black/50'
+  return (
+    <>
+      <label role="button" aria-label="拍照" className={base}>
+        <input
+          ref={cameraRef}
+          type="file"
+          accept="image/*"
+          capture="environment"
+          className="sr-only"
+          onChange={onPick}
+        />
+        <span className={compact ? 'text-base' : 'text-4xl'}>📷</span>
+        {!compact && <span className="text-sm">拍照</span>}
+      </label>
+
+      <label role="button" aria-label="从相册选" className={base}>
+        <input
+          ref={albumRef}
+          type="file"
+          accept="image/*"
+          multiple
+          className="sr-only"
+          onChange={onPick}
+        />
+        <span className={compact ? 'text-base' : 'text-4xl'}>🖼</span>
+        {!compact && <span className="text-sm">从相册选</span>}
+      </label>
+    </>
+  )
+}
 export default function CapturePage({ onOpenGallery }: { onOpenGallery: () => void }) {
   const queryClient = useQueryClient()
-  const inputRef = useRef<HTMLInputElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  // 两个入口：拍照走相机、相册走文件选择（capture 与 multiple 不能同时保证行为一致）
+  const cameraRef = useRef<HTMLInputElement>(null)
+  const albumRef = useRef<HTMLInputElement>(null)
   const [drafts, setDrafts] = useState<Draft[]>([])
   const [saved, setSaved] = useState(0)
   const [busy, setBusy] = useState(false)
@@ -41,9 +90,9 @@ export default function CapturePage({ onOpenGallery }: { onOpenGallery: () => vo
 
   const current = drafts[0] ?? null
 
-  const addFiles = useCallback((files: FileList | null) => {
-    if (!files || files.length === 0) return
-    setDrafts((prev) => [...prev, ...Array.from(files).map(newDraft)])
+  const addFiles = useCallback((files: File[]) => {
+    if (files.length === 0) return
+    setDrafts((prev) => appendDrafts(prev, files, newDraft))
     setError(null)
   }, [])
 
@@ -109,25 +158,33 @@ export default function CapturePage({ onOpenGallery }: { onOpenGallery: () => vo
 
   const hint = useMemo(() => '1-6 选品类 · Q/W/E 选厚薄 · Enter 保存 · Backspace 跳过', [])
 
+  function onPick(event: React.ChangeEvent<HTMLInputElement>) {
+    // 必须先快照成数组：下面会把 input.value 清空，FileList 是活引用，清空后就空了。
+    // （桌面 Chrome 有时保留旧引用，iOS / 部分安卓 WebView 会直接拿到空数组。）
+    const input = event.currentTarget
+    const picked = Array.from(input.files ?? [])
+
+    // 只有真拿到文件才清空，否则 150ms 的兜底重读永远读不到东西
+    if (picked.length > 0) input.value = ''
+    // 选完立刻把焦点从 file input 上摘掉：
+    // 否则字符键会被守卫拦下，Enter 还会触发浏览器默认的「再开一次文件选择框」
+    input.blur()
+    containerRef.current?.focus({ preventScroll: true })
+    addFiles(picked)
+
+    if (picked.length > 0) return
+
+    // 有些 WebView 的 change 早于文件就绪：稍后再读一次，仍空才提示
+    window.setTimeout(() => {
+      const late = Array.from(input.files ?? [])
+      input.value = ''
+      if (late.length > 0) addFiles(late)
+      else toast('没有取到图片，请再试一次')
+    }, 150)
+  }
+
   return (
     <div ref={containerRef} tabIndex={-1} className="space-y-4 outline-none">
-      <input
-        ref={inputRef}
-        type="file"
-        accept="image/*"
-        capture="environment"
-        multiple
-        className="hidden"
-        onChange={(e) => {
-          addFiles(e.target.files)
-          e.target.value = ''
-          // 选完立刻把焦点从 file input 上摘掉：
-          // 否则字符键会被守卫拦下，Enter 还会触发浏览器默认的「再开一次文件选择框」
-          e.target.blur()
-          containerRef.current?.focus({ preventScroll: true })
-        }}
-      />
-
       {current ? (
         <>
           <div className="relative overflow-hidden rounded-2xl bg-black/5">
@@ -237,13 +294,12 @@ export default function CapturePage({ onOpenGallery }: { onOpenGallery: () => vo
             >
               {busy ? '保存中…' : `保存${saved > 0 ? `（已存 ${saved}）` : ''}`}
             </button>
-            <button
-              type="button"
-              onClick={() => inputRef.current?.click()}
-              className="rounded-xl border border-black/10 bg-white px-4 py-3 text-sm text-black/70"
-            >
-              继续拍
-            </button>
+            <CaptureEntry
+              cameraRef={cameraRef}
+              albumRef={albumRef}
+              onPick={onPick}
+              compact
+            />
             <button
               type="button"
               onClick={dropCurrent}
@@ -255,14 +311,9 @@ export default function CapturePage({ onOpenGallery }: { onOpenGallery: () => vo
         </>
       ) : (
         <div className="space-y-4">
-          <button
-            type="button"
-            onClick={() => inputRef.current?.click()}
-            className="flex aspect-square w-full flex-col items-center justify-center gap-2 rounded-2xl border border-dashed border-black/15 bg-white/60 text-black/50"
-          >
-            <span className="text-4xl">📷</span>
-            <span className="text-sm">拍一张 / 连拍多张</span>
-          </button>
+          <div className="grid grid-cols-2 gap-2">
+            <CaptureEntry cameraRef={cameraRef} albumRef={albumRef} onPick={onPick} />
+          </div>
           <p className="text-center text-xs text-black/40">{hint}</p>
           <div className="rounded-xl bg-black/5 px-3 py-2 text-center text-xs text-black/50">
             本次已录入 {saved} 件

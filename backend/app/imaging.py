@@ -7,12 +7,15 @@ from pathlib import Path
 
 from PIL import Image as PILImage
 from PIL import ImageOps
+from pillow_heif import register_heif_opener
+
+# iPhone 直出是 HEIC；注册后 Pillow 才能打开。失败就按 UnsupportedImage 走 415。
+register_heif_opener()
 
 DERIVED_WIDTH = 1024
 THUMB_WIDTH = 256
 WEBP_QUALITY = 82
-ALLOWED_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
-# HEIC/HEIF 需要 pillow-heif 插件，见 DECISIONS.md 已知缺口
+ALLOWED_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif", ".heic", ".heif"}
 
 
 class UnsupportedImage(Exception):

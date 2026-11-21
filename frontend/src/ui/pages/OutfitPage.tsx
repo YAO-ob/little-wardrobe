@@ -2,12 +2,13 @@ import { useEffect, useRef, useState } from 'react'
 import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { getRecommend, saveOutfit } from '../../core/api'
 import { CATEGORIES, CATEGORY_LABEL, OCCASIONS } from '../../core/labels'
+import { CITIES, type CityName } from '../../core/cities'
 import { badgeFor, maskKey } from '../../core/recommendBadge'
 import type { Category, Occasion, RecommendOutfit } from '../../core/types'
 import { getLlmKey, setLlmKey, clearLlmKey } from '../../adapters/llmKey'
+import { getCity, setCity } from '../../adapters/city'
 import { toast } from '../../adapters/toast'
 
-const CITY = '杭州'
 // 模型正常 0.8–1.2s；后端最坏会等 ~10.5s（天气重试）。超过这个就退回规则，别让用户干等
 const SLOW_TIMEOUT_MS = 12_000
 
@@ -53,6 +54,8 @@ export default function OutfitPage() {
   const [apiKey, setApiKey] = useState(() => getLlmKey())
   const [aiMode, setAiMode] = useState(false)
   const [keyVersion, setKeyVersion] = useState(0)
+  const [city, setCityState] = useState<CityName>(() => getCity())
+  const [cityOpen, setCityOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [draftKey, setDraftKey] = useState('')
   // 弹层两态：editing=true 显示输入框；false 显示「已配置」状态
@@ -66,10 +69,10 @@ export default function OutfitPage() {
   const hasKey = apiKey.trim().length > 0
 
   const { data, isLoading, error, isFetching, refetch } = useQuery({
-    queryKey: ['recommend', occasion, aiMode ? 'llm' : 'rules', keyVersion],
+    queryKey: ['recommend', city, occasion, aiMode ? 'llm' : 'rules', keyVersion],
     queryFn: () =>
       getRecommend({
-        city: CITY,
+        city,
         occasion,
         mode: aiMode ? 'llm' : 'rules',
         llmKey: aiMode ? apiKey : undefined,
@@ -78,6 +81,12 @@ export default function OutfitPage() {
     staleTime: 60_000,
     placeholderData: keepPreviousData,
   })
+
+  function chooseCity(name: CityName) {
+    setCity(name) // 写 localStorage，刷新后仍是这个城市
+    setCityState(name)
+    setCityOpen(false)
+  }
 
   // 太慢就退回规则，别让页面一直转
   useEffect(() => {
@@ -142,7 +151,7 @@ export default function OutfitPage() {
   }
 
   async function save(outfit: RecommendOutfit, index: number) {
-    const key = `${occasion}-${index}`
+    const key = `${city}-${occasion}-${index}`
     if (savedKeys.includes(key) || savingKey === key || !data) return
     setSavingKey(key)
     try {
@@ -164,15 +173,43 @@ export default function OutfitPage() {
 
   return (
     <div className="space-y-3">
-      <section className="rounded-2xl bg-white p-3 shadow-sm">
+      <section className="relative rounded-2xl bg-white p-3 shadow-sm">
+        <div className="flex items-baseline justify-between">
+          <button
+            type="button"
+            onClick={() => setCityOpen((value) => !value)}
+            aria-label="切换城市"
+            className="flex items-baseline gap-1 text-sm font-medium"
+          >
+            {data?.weather.city ?? city}
+            {data ? <span className="text-black/40"> · {data.weather.weather_text}</span> : null}
+            <span className="text-[10px] text-black/30">▾</span>
+          </button>
+          <p className="text-[11px] text-black/40">{data?.weather.date ?? ''}</p>
+        </div>
+
+        {cityOpen && (
+          <>
+            <div className="fixed inset-0 z-10" onClick={() => setCityOpen(false)} />
+            <div className="absolute left-3 top-10 z-20 w-36 overflow-hidden rounded-xl border border-black/10 bg-white shadow-lg">
+              {CITIES.map((name) => (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() => chooseCity(name)}
+                  className={`block w-full px-3 py-2 text-left text-sm ${
+                    name === city ? 'bg-black text-white' : 'text-black/70 hover:bg-black/5'
+                  }`}
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+
         {data ? (
           <>
-            <div className="flex items-baseline justify-between">
-              <p className="text-sm font-medium">
-                {data.weather.city} · {data.weather.weather_text}
-              </p>
-              <p className="text-[11px] text-black/40">{data.weather.date}</p>
-            </div>
             <p className="mt-1 text-3xl font-semibold tracking-tight">
               {Math.round(data.weather.t_min)}–{Math.round(data.weather.t_max)}
               <span className="ml-0.5 text-base font-normal text-black/50">℃</span>
@@ -284,7 +321,7 @@ export default function OutfitPage() {
       )}
 
       {(data?.outfits ?? []).map((outfit, index) => {
-        const key = `${occasion}-${index}`
+        const key = `${city}-${occasion}-${index}`
         const isSaved = savedKeys.includes(key)
         const isSaving = savingKey === key
         return (
@@ -325,7 +362,7 @@ export default function OutfitPage() {
       })}
 
       <p className="pb-2 text-center text-[11px] text-black/30">
-        搭配由规则生成（{CATEGORIES.length} 类单品 · {CITY}）· 天气数据 Open-Meteo
+        搭配由规则生成（{CATEGORIES.length} 类单品 · {city}）· 天气数据 Open-Meteo
       </p>
 
       {settingsOpen && (

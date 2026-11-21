@@ -5,4 +5,5 @@ alembic
 pydantic-settings
 python-multipart
 pillow
+pillow-heif
 httpx
