@@ -20,7 +20,7 @@ from ..config import get_settings
 from ..db import get_db
 from ..llm import LLMError, chat_json_with_image, resolve_llm_config
 from ..models import Image
-from ..schemas import ClassifyIn, ClassifyOut
+from ..schemas import COLOR_FAMILIES, ClassifyIn, ClassifyOut
 
 logger = logging.getLogger(__name__)
 
@@ -37,12 +37,15 @@ JPEG_QUALITY = 80
 _cache: dict[int, tuple[float, ClassifyOut]] = {}
 
 SYSTEM_PROMPT = (
-    "你是服装录入助手。看图判断两件事：品类（category）和厚薄（warmth）。\n"
+    "你是服装录入助手。看图判断三件事：品类（category）、厚薄（warmth）、家族色（color_family）。\n"
     "category 只能是：top（上装/衬衫/毛衣）、outer（外套）、bottom（下装/裤裙）、"
     "shoes（鞋）、accessory（配饰）、dress（连衣裙）。\n"
     "warmth 只能是 1（薄）、2（中）、3（厚），拿不准给 null。\n"
-    "不要判断颜色、材质、品牌。看不清就给低 confidence。\n"
-    '只输出 JSON，形如 {"category": "shoes", "warmth": 2, "confidence": 0.9}'
+    "color_family 只能从这些里选：black/white/gray/beige/brown/blue/navy/green/red/pink/"
+    "purple/yellow/orange/multi。只说家族色，不要猜精确色号、不要给 hex；"
+    "有图案、多色或看不清就给 multi 或 null。\n"
+    "不要判断材质和品牌。看不清就给低 confidence。\n"
+    '只输出 JSON，形如 {"category": "shoes", "warmth": 2, "color_family": "black", "confidence": 0.9}'
 )
 
 USER_PROMPT = "这张图里的单品是什么？按 schema 输出 JSON。"
@@ -67,12 +70,18 @@ def _result(
     *,
     category: str | None = None,
     warmth: int | None = None,
+    color_family: str | None = None,
     confidence: float | None = None,
     source: str = "none",
     reason: str | None = None,
 ) -> ClassifyOut:
     return ClassifyOut(
-        category=category, warmth=warmth, confidence=confidence, source=source, reason=reason
+        category=category,
+        warmth=warmth,
+        color_family=color_family,
+        confidence=confidence,
+        source=source,
+        reason=reason,
     )
 
 
@@ -87,8 +96,6 @@ def _encode(path) -> tuple[str, str]:  # noqa: ANN001
 
 
 def _validate(data: dict) -> ClassifyOut:
-    category = data.get("category")
-    warmth = data.get("warmth")
     raw_confidence = data.get("confidence")
 
     if (
@@ -99,16 +106,43 @@ def _validate(data: dict) -> ClassifyOut:
         return _result(reason="invalid_confidence")
 
     confidence = float(raw_confidence)
-
-    if not isinstance(category, str) or category not in CATEGORIES:
-        return _result(confidence=confidence, reason="invalid_label")
-    if warmth is not None and (isinstance(warmth, bool) or warmth not in WARMTHS):
-        return _result(confidence=confidence, reason="invalid_label")
-
     if confidence < min_confidence():
         return _result(confidence=confidence, reason="low_confidence")
 
-    return _result(category=category, warmth=warmth, confidence=confidence, source="llm")
+    # 逐字段容错：颜色判错不该连累品类，品类判错也不该连累颜色
+    category = data.get("category")
+    warmth = data.get("warmth")
+    color = data.get("color_family")
+
+    invalid = False
+    if not isinstance(category, str) or category not in CATEGORIES:
+        category = None
+        invalid = True
+    if warmth is not None and (isinstance(warmth, bool) or warmth not in WARMTHS):
+        warmth = None
+        invalid = True
+    if color is not None and (not isinstance(color, str) or color not in COLOR_FAMILIES):
+        color = None
+        invalid = True
+
+    if category is None and warmth is None and color is None:
+        return _result(confidence=confidence, reason="invalid_label" if invalid else "no_fields")
+
+    return _result(
+        category=category,
+        warmth=warmth,
+        color_family=color,
+        confidence=confidence,
+        source="llm",
+        reason="invalid_label" if invalid else None,
+    )
+
+
+async def classify_path(path, config) -> ClassifyOut:  # noqa: ANN001
+    """给脚本复用的入口：压图 → 调模型 → 逐字段校验。"""
+    image_b64, mime = _encode(path)
+    data, _usage = await chat_json_with_image(config, SYSTEM_PROMPT, USER_PROMPT, image_b64, mime)
+    return _validate(data)
 
 
 @router.post("", response_model=ClassifyOut)
@@ -138,13 +172,10 @@ async def classify(
 
     settings = get_settings()
     try:
-        image_b64, mime = _encode(settings.media_dir / image.path)
+        result = await classify_path(settings.media_dir / image.path, config)
     except (FileNotFoundError, OSError):
         logger.warning("classify image_id=%s reason=image_missing", payload.image_id)
         return _result(reason="image_missing")
-
-    try:
-        data, _usage = await chat_json_with_image(config, SYSTEM_PROMPT, USER_PROMPT, image_b64, mime)
     except LLMError as exc:
         logger.warning(
             "classify image_id=%s source=none reason=%s elapsed_ms=%.0f",
@@ -154,7 +185,6 @@ async def classify(
         )
         return _result(reason=exc.reason)
 
-    result = _validate(data)
     if result.source == "llm":
         _cache[payload.image_id] = (time.monotonic(), result)
 

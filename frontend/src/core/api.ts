@@ -56,6 +56,7 @@ export function createItem(payload: {
   category: Category
   warmth?: Warmth | null
   occasion?: Occasion | null
+  color_family?: string | null
   name?: string
   image_ids?: number[]
 }): Promise<import('./types').Item> {
@@ -74,6 +75,7 @@ export function deleteImage(id: number): Promise<void> {
 export interface ClassifyResult {
   category: string | null
   warmth: number | null
+  color_family: string | null
   confidence: number | null
   source: 'llm' | 'none'
   reason: string | null

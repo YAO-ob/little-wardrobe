@@ -4,7 +4,14 @@ import { deleteItem, extractReceipt, updateItem } from '../../core/api'
 import { buildItemPatch, validateItemForm, type ItemFormValues } from '../../core/itemPatch'
 import { visibleFields } from '../../core/itemFields'
 import { mergeReceipt } from '../../core/receiptMerge'
-import { CATEGORIES, CARE_EXCLUSIVE_GROUPS, CARE_SYMBOLS, OCCASIONS, WARMTHS } from '../../core/labels'
+import {
+  CARE_EXCLUSIVE_GROUPS,
+  CARE_SYMBOLS,
+  CATEGORIES,
+  COLOR_OPTIONS,
+  OCCASIONS,
+  WARMTHS,
+} from '../../core/labels'
 import type { Item } from '../../core/types'
 import { getLlmKey } from '../../adapters/llmKey'
 import { toast } from '../../adapters/toast'
@@ -324,12 +331,18 @@ export default function ItemDetailModal({ item, onClose }: { item: Item; onClose
         <div className="grid grid-cols-2 gap-2">
           <label className="col-span-1 space-y-1">
             <span className="text-[11px] text-black/50">颜色 {mark('color_family')}</span>
-            <input
+            <select
               value={form.color_family}
               onChange={(event) => update('color_family', event.target.value)}
-              placeholder="黑 / 藏青"
               className={fieldClass}
-            />
+            >
+              <option value="">不填</option>
+              {COLOR_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
           </label>
 
           <label className="col-span-1 space-y-1">

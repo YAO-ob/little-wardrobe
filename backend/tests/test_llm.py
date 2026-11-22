@@ -598,7 +598,7 @@ def test_cache_invalidated_when_item_changes(client):
     items = client.get("/api/items", params={"limit": 1}).json()["items"]
     target = items[0]
     time_module.sleep(1.05)  # updated_at 是秒级精度，保证真的变了
-    client.patch(f"/api/items/{target['id']}", json={"color_family": "藏青"})
+    client.patch(f"/api/items/{target['id']}", json={"color_family": "navy"})
 
     FakeClient.chat_queue = [_valid_reply(client)]
     second = client.get(

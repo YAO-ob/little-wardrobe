@@ -13,8 +13,25 @@ Layer = Literal["inner", "mid", "outer"]
 
 # 洗护符号只允许这 12 个编码：自由文本会让「30度/30℃/温水」三种写法并存，
 # 以后想按洗护方式筛选就没法做。
-CARE_SYMBOLS = (
-    "wash_30",
+COLOR_FAMILIES = (
+    "black",
+    "white",
+    "gray",
+    "beige",
+    "brown",
+    "blue",
+    "navy",
+    "green",
+    "red",
+    "pink",
+    "purple",
+    "yellow",
+    "orange",
+    "multi",
+)
+
+
+CARE_SYMBOLS = (    "wash_30",
     "wash_40",
     "hand_wash",
     "no_wash",
@@ -37,6 +54,19 @@ CARE_EXCLUSIVE_GROUPS: tuple[tuple[str, ...], ...] = (
     ("iron_low", "no_iron"),
     ("dry_clean", "no_dry_clean"),
 )
+
+
+def _validate_color_family(value: str | None) -> str | None:
+    if value is None:
+        return None
+    text = value.strip()
+    if text == "":
+        return None
+    if text not in COLOR_FAMILIES:
+        raise ValueError(
+            f"颜色只能是这些之一：{'、'.join(COLOR_FAMILIES)}（中文只用于显示）"
+        )
+    return text
 
 
 def _validate_care_symbols(value: list[str] | None) -> list[str] | None:
@@ -98,6 +128,7 @@ class ItemCreate(BaseModel):
     image_ids: list[int] = Field(default_factory=list)
 
     _care = field_validator("care_symbols")(_validate_care_symbols)
+    _color = field_validator("color_family")(_validate_color_family)
 
 
 class ItemUpdate(BaseModel):
@@ -122,6 +153,7 @@ class ItemUpdate(BaseModel):
     note: str | None = None
 
     _care = field_validator("care_symbols")(_validate_care_symbols)
+    _color = field_validator("color_family")(_validate_color_family)
 
 
 class ItemOut(BaseModel):
@@ -288,6 +320,7 @@ class ClassifyIn(BaseModel):
 class ClassifyOut(BaseModel):
     category: str | None = None
     warmth: int | None = None
+    color_family: str | None = None
     confidence: float | None = None
     source: str = "none"
     reason: str | None = None
@@ -396,7 +429,7 @@ def item_to_out(item) -> ItemOut:  # noqa: ANN001
         name=item.name,
         category=item.category,
         subcategory=item.subcategory,
-        color_family=item.color_family,
+        color_family=item.color_family if item.color_family in COLOR_FAMILIES else None,
         color_hex=item.color_hex,
         season=parse_season(item.season),
         occasion=item.occasion,

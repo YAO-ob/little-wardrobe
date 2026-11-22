@@ -117,17 +117,17 @@ def test_create_and_list(client):
 def test_incomplete_filter(client):
     # 配饰没有厚薄概念：颜色 + 场合填齐就算完整，不因 warmth 缺失被标红
     accessory = client.post(
-        "/api/items", json={"category": "accessory", "color_family": "黑", "occasion": "casual"}
+        "/api/items", json={"category": "accessory", "color_family": "black", "occasion": "casual"}
     ).json()
     # 上衣核心字段（颜色 / 场合 / 厚薄）齐全 → 完整
     complete = client.post(
         "/api/items",
-        json={"category": "top", "color_family": "黑", "occasion": "casual", "warmth": 2},
+        json={"category": "top", "color_family": "black", "occasion": "casual", "warmth": 2},
     ).json()
     # 缺颜色 / 缺场合 / 缺厚薄 → 都该被标出来
     client.post("/api/items", json={"category": "top", "occasion": "casual", "warmth": 2})
-    client.post("/api/items", json={"category": "top", "color_family": "黑", "warmth": 2})
-    client.post("/api/items", json={"category": "top", "color_family": "黑", "occasion": "casual"})
+    client.post("/api/items", json={"category": "top", "color_family": "black", "warmth": 2})
+    client.post("/api/items", json={"category": "top", "color_family": "black", "occasion": "casual"})
 
     listing = client.get("/api/items", params={"incomplete": "true"}).json()
     ids = {item["id"] for item in listing["items"]}
@@ -166,7 +166,7 @@ def test_patch_accepts_all_editable_fields(client):
     item = client.post("/api/items", json={"category": "top"}).json()
 
     payload = {
-        "color_family": "藏青",
+        "color_family": "navy",
         "color_hex": "#223344",
         "brand": "测试牌",
         "material": "棉",
@@ -208,9 +208,9 @@ def test_patch_and_delete(client):
 
     patched = client.patch(
         f"/api/items/{item['id']}",
-        json={"color_family": "红", "season": ["summer"], "warmth": 1},
+        json={"color_family": "red", "season": ["summer"], "warmth": 1},
     ).json()
-    assert patched["color_family"] == "红"
+    assert patched["color_family"] == "red"
     assert patched["season"] == ["summer"]
 
     assert client.delete(f"/api/items/{item['id']}").status_code == 204

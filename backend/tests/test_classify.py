@@ -94,10 +94,60 @@ def test_classify_returns_llm_result(client):
     assert body == {
         "category": "shoes",
         "warmth": 2,
+        "color_family": None,
         "confidence": 0.9,
         "source": "llm",
         "reason": None,
     }
+
+
+def test_color_family_is_returned_when_valid(client):
+    FakeClient.response = completion(
+        json.dumps(
+            {"category": "shoes", "warmth": 2, "color_family": "black", "confidence": 0.9}
+        )
+    )
+
+    body = classify_image(client, make_image(client))
+
+    assert body["color_family"] == "black"
+    assert body["source"] == "llm"
+
+
+def test_bad_color_does_not_drop_category(client):
+    """逐字段容错：颜色判错只丢颜色，品类厚薄照常返回。"""
+    FakeClient.response = completion(
+        json.dumps(
+            {
+                "category": "shoes",
+                "warmth": 2,
+                "color_family": "charcoal",
+                "confidence": 0.9,
+            }
+        )
+    )
+
+    body = classify_image(client, make_image(client))
+
+    assert body["category"] == "shoes"
+    assert body["warmth"] == 2
+    assert body["color_family"] is None
+    assert body["reason"] == "invalid_label"
+    assert body["source"] == "llm"
+
+
+def test_low_confidence_drops_color_too(client):
+    FakeClient.response = completion(
+        json.dumps(
+            {"category": "shoes", "warmth": 2, "color_family": "black", "confidence": 0.3}
+        )
+    )
+
+    body = classify_image(client, make_image(client))
+
+    assert body["color_family"] is None
+    assert body["category"] is None
+    assert body["reason"] == "low_confidence"
 
 
 def test_low_confidence_is_dropped(client):

@@ -164,11 +164,18 @@ export default function GalleryPage() {
                       🧺
                     </div>
                   )}
-                  {incomplete && (
-                    <span className="absolute left-1 top-1 rounded-full bg-amber-500/90 px-1.5 py-0.5 text-[10px] text-white">
-                      信息不全
-                    </span>
-                  )}
+                  {incomplete &&
+                    (incompleteOnly ? (
+                      <span className="absolute left-1 top-1 rounded-full bg-amber-500/90 px-1.5 py-0.5 text-[10px] text-white">
+                        信息不全
+                      </span>
+                    ) : (
+                      <span
+                        aria-label="信息不全"
+                        title="信息不全"
+                        className="absolute left-1 top-1 h-2 w-2 rounded-full bg-amber-500/90"
+                      />
+                    ))}
                   <button
                     type="button"
                     onClick={(event) => {

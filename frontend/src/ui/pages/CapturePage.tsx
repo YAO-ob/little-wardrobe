@@ -30,6 +30,8 @@ interface Draft {
   occasion: Occasion | null
   categorySource: FieldSource | null
   warmthSource: FieldSource | null
+  // 识别给的颜色家族；录入页没有颜色按钮（不为它牺牲「三次点击」），保存时直接采用
+  colorFamily: string | null
   // 选图后立刻上传拿到的 id；失败或关掉识别时为 null，退回「保存时才上传」
   imageId: number | null
   uploadState: UploadState
@@ -46,6 +48,7 @@ function newDraft(file: File): Draft {
     occasion: null,
     categorySource: null,
     warmthSource: null,
+    colorFamily: null,
     imageId: null,
     uploadState: 'idle',
     suggestion: null,
@@ -196,6 +199,7 @@ export default function CapturePage({ onOpenGallery }: { onOpenGallery: () => vo
         updateById(head.id, (draft) => ({
           ...mergeSuggestion(draft, suggestion),
           suggestion,
+          colorFamily: result.color_family ?? draft.colorFamily,
         }))
       } catch {
         // 识别失败静默降级，不影响录入
@@ -244,6 +248,7 @@ export default function CapturePage({ onOpenGallery }: { onOpenGallery: () => vo
         category,
         warmth,
         occasion: current.occasion,
+        color_family: current.colorFamily ?? undefined,
         image_ids: [imageId],
       })
       await queryClient.invalidateQueries({ queryKey: ['items'] })

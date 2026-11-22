@@ -32,6 +32,28 @@ export const OCCASION_LABEL: Record<string, string> = Object.fromEntries(
   OCCASIONS.map((o) => [o.value, o.label]),
 )
 
+/** 颜色家族：库里只存英文枚举，中文只做显示（与后端 COLOR_FAMILIES 一致）。 */
+export const COLOR_LABELS: Record<string, string> = {
+  black: '黑',
+  white: '白',
+  gray: '灰',
+  beige: '米',
+  brown: '棕',
+  blue: '蓝',
+  navy: '藏青',
+  green: '绿',
+  red: '红',
+  pink: '粉',
+  purple: '紫',
+  yellow: '黄',
+  orange: '橙',
+  multi: '花色',
+}
+
+export const COLOR_OPTIONS: { value: string; label: string }[] = Object.entries(
+  COLOR_LABELS,
+).map(([value, label]) => ({ value, label }))
+
 /** 洗护符号：前后端共用这 12 个编码，不许自由文本（否则「30度/30℃/温水」会并存）。 */
 export const CARE_SYMBOLS: { value: string; label: string }[] = [
   { value: 'wash_30', label: '30℃机洗' },
