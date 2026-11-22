@@ -35,6 +35,13 @@ if (-not (Test-Path (Join-Path $root 'backend\.pyenv\fastapi'))) {
 }
 
 Write-Host 'API  -> http://127.0.0.1:8000' -ForegroundColor Cyan
+
+# Apply migrations before starting. Without this a new migration makes every
+# query fail with "no such column" and the app looks broken on startup.
+$migrateArgs = @('-m', 'alembic', '-c', 'backend\alembic.ini', 'upgrade', 'head')
+& $python @migrateArgs
+if ($LASTEXITCODE -ne 0) { throw 'alembic upgrade failed; fix the migration before starting.' }
+
 $uvicornArgs = @('-m', 'uvicorn', 'app.main:app', '--host', '127.0.0.1', '--port', '8000')
 if ($Reload) { $uvicornArgs += '--reload' }
 $api = Start-Process -PassThru -NoNewWindow -FilePath $python `
