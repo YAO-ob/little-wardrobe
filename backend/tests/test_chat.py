@@ -309,7 +309,8 @@ def make_items(client, spec):
 
 def test_empty_outfit_reply_has_real_counts(client, monkeypatch):
     monkeypatch.setenv("EW_LLM_KEY", "test-key")
-    make_items(client, [("top", None), ("bottom", None), ("shoes", "casual")])
+    # 没有鞋：严格场合过滤缺鞋，放宽兜底也缺鞋 → 仍然组不出，给真实件数建议
+    make_items(client, [("top", None), ("bottom", None)])
     FakeClient.chat_queue = [
         {"reply": "面试就穿那件上衣吧。", "intent": "recommend", "occasion": "formal", "item_ids": []},
         {"reply": "面试就穿那件上衣吧。", "intent": "recommend", "occasion": "formal", "item_ids": []},
@@ -326,7 +327,8 @@ def test_empty_outfit_reply_has_real_counts(client, monkeypatch):
 
 def test_empty_outfit_with_no_usable_items_says_so(client, monkeypatch):
     monkeypatch.setenv("EW_LLM_KEY", "test-key")
-    make_items(client, [("top", "casual"), ("bottom", "casual"), ("shoes", "casual")])
+    # 只有一件 casual 上衣，问 formal：目标场合无可用，兜底也凑不齐品类 → 组不出
+    make_items(client, [("top", "casual")])
     FakeClient.chat_queue = [
         {"reply": "穿那件。", "intent": "recommend", "occasion": "formal", "item_ids": []},
         {"reply": "穿那件。", "intent": "recommend", "occasion": "formal", "item_ids": []},
@@ -336,6 +338,24 @@ def test_empty_outfit_with_no_usable_items_says_so(client, monkeypatch):
 
     assert body["outfits"] == []
     assert "一件能穿的都没有" in body["reply"]
+    assert "穿那件" not in body["reply"]
+
+
+def test_chat_occasion_shortage_relaxes_and_is_honest(client, monkeypatch):
+    """目标场合组不出时兜底放宽：出套 + 带标记 + 回复诚实，不用模型空话。"""
+    monkeypatch.setenv("EW_LLM_KEY", "test-key")
+    # 全是 casual，问 formal：严格组不出，兜底放宽后能组出
+    make_items(client, [("top", "casual"), ("bottom", "casual"), ("shoes", "casual")])
+    FakeClient.chat_queue = [
+        {"reply": "穿那件。", "intent": "recommend", "occasion": "formal", "item_ids": []},
+        {"reply": "穿那件。", "intent": "recommend", "occasion": "formal", "item_ids": []},
+    ]
+
+    body = chat(client, "明天面试穿什么")
+
+    assert body["outfits"]
+    assert all(o["relaxed_occasion"] for o in body["outfits"])
+    assert "正式" in body["reply"]
     assert "穿那件" not in body["reply"]
 
 

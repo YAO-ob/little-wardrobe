@@ -239,6 +239,10 @@ class RecommendItemOut(BaseModel):
 class RecommendOutfitOut(BaseModel):
     items: list[RecommendItemOut]
     reason: str = Field(description="一句中文理由，说明为什么这么配")
+    relaxed_occasion: bool = Field(
+        default=False,
+        description="true = 这套掺了不是专门为目标场合的单品（场合不足时的兜底）",
+    )
 
 
 class RecommendOut(BaseModel):

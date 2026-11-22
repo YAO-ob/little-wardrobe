@@ -39,6 +39,13 @@ CATEGORY_LABELS = {
 
 WARMTH_LABELS = {1: "薄", 2: "中", 3: "厚"}
 
+OCCASION_LABELS = {
+    "casual": "日常",
+    "work": "通勤",
+    "sport": "运动",
+    "formal": "正式",
+}
+
 # 图层：只有这三类参与「内/中/外」，下装鞋配饰不参与
 LAYER_BY_CATEGORY = {
     "outer": "outer",
@@ -94,6 +101,8 @@ class WeatherFacts:
 class OutfitPlan:
     items: tuple[RuleItem, ...]
     reason: str
+    # true = 这套是场合不足时放宽组出的，掺了不是专门为目标场合的单品
+    relaxed_occasion: bool = False
 
 
 @dataclass(frozen=True)
@@ -275,96 +284,107 @@ def build_outfits(
     want_extra = need_extra(facts.feels_min, facts.feels_max)
     target_formality = formality_of(occasion)
 
-    usable = [item for item in items if _usable(item, occasion)]
-
-    def group(category: str) -> list[RuleItem]:
-        return _rank(
-            [item for item in usable if item.category == category],
-            target_warmth,
-            target_formality,
+    def assemble(
+        pool: list[RuleItem], relaxed: bool
+    ) -> tuple[tuple[OutfitPlan, ...], list[str]]:
+        tops = _rank([i for i in pool if i.category == "top"], target_warmth, target_formality)
+        bottoms = _rank([i for i in pool if i.category == "bottom"], target_warmth, target_formality)
+        shoes = _rank([i for i in pool if i.category == "shoes"], target_warmth, target_formality)
+        outers = _rank([i for i in pool if i.category == "outer"], target_warmth, target_formality)
+        dresses = _rank([i for i in pool if i.category == "dress"], target_warmth, target_formality)
+        accessories = _rank(
+            [i for i in pool if i.category == "accessory"], target_warmth, target_formality
         )
 
-    tops = group("top")
-    bottoms = group("bottom")
-    shoes = group("shoes")
-    outers = group("outer")
-    dresses = group("dress")
-    accessories = group("accessory")
+        missing: list[str] = []
+        if not tops and not dresses:
+            missing.append("上衣或连衣裙")
+        if not bottoms and not dresses:
+            missing.append("下装")
+        if not shoes:
+            missing.append("鞋")
+        if want_outer and not outers:
+            missing.append("外套")
 
-    missing: list[str] = []
-    if not tops and not dresses:
-        missing.append("上衣或连衣裙")
-    if not bottoms and not dresses:
-        missing.append("下装")
-    if not shoes:
-        missing.append("鞋")
-    if want_outer and not outers:
-        missing.append("外套")
-
-    # 候选组合：基础三件套 + 连衣裙替代方案
-    # combo 用来保证「三套之间下装/鞋不重样」，凑不满时允许回退重复。
-    candidates: list[tuple[list[RuleItem], tuple[object, ...]]] = []
-    if tops and bottoms and shoes:
-        for top in tops[:4]:
-            for bottom in bottoms[:4]:
+        # 候选组合：基础三件套 + 连衣裙替代方案
+        # combo 用来保证「三套之间下装/鞋不重样」，凑不满时允许回退重复。
+        candidates: list[tuple[list[RuleItem], tuple[object, ...]]] = []
+        if tops and bottoms and shoes:
+            for top in tops[:4]:
+                for bottom in bottoms[:4]:
+                    for shoe in shoes[:4]:
+                        candidates.append(([top, bottom, shoe], ("bottom", bottom.id, shoe.id)))
+        if dresses and shoes:
+            for dress in dresses[:4]:
                 for shoe in shoes[:4]:
-                    candidates.append(([top, bottom, shoe], ("bottom", bottom.id, shoe.id)))
-    if dresses and shoes:
-        for dress in dresses[:4]:
-            for shoe in shoes[:4]:
-                candidates.append(([dress, shoe], ("dress", dress.id, shoe.id)))
+                    candidates.append(([dress, shoe], ("dress", dress.id, shoe.id)))
 
-    decorated: list[tuple[tuple, tuple[object, ...], list[RuleItem]]] = []
-    seen: set[frozenset[int]] = set()
-    for base, combo in candidates:
-        outfit = _decorate(
-            base,
-            tops=tops,
-            outers=outers,
-            accessories=accessories,
-            want_outer=want_outer,
-            want_extra=want_extra,
-            target_warmth=target_warmth,
-        )
-        ids = frozenset(item.id for item in outfit)
-        if len(ids) != len(outfit):
-            continue  # 同一套里不许重复
-        if ids in seen:
-            continue
-        seen.add(ids)
-        decorated.append((_score(outfit, target_warmth, target_formality), combo, outfit))
+        decorated: list[tuple[tuple, tuple[object, ...], list[RuleItem]]] = []
+        seen: set[frozenset[int]] = set()
+        for base, combo in candidates:
+            outfit = _decorate(
+                base,
+                tops=tops,
+                outers=outers,
+                accessories=accessories,
+                want_outer=want_outer,
+                want_extra=want_extra,
+                target_warmth=target_warmth,
+            )
+            ids = frozenset(item.id for item in outfit)
+            if len(ids) != len(outfit):
+                continue  # 同一套里不许重复
+            if ids in seen:
+                continue
+            seen.add(ids)
+            decorated.append((_score(outfit, target_warmth, target_formality), combo, outfit))
 
-    decorated.sort(key=lambda entry: entry[0])
+        decorated.sort(key=lambda entry: entry[0])
 
-    # 先按 (下装, 鞋) 组合去重地取，凑不满 3 套才允许重复组合。
-    picked: list[list[RuleItem]] = []
-    used_combos: set[tuple[object, ...]] = set()
-    leftovers: list[list[RuleItem]] = []
-    for _score_value, combo, outfit in decorated:
-        if combo in used_combos:
-            leftovers.append(outfit)
-            continue
-        used_combos.add(combo)
-        picked.append(outfit)
-        if len(picked) == MAX_OUTFITS:
-            break
-
-    if len(picked) < MAX_OUTFITS:
-        for outfit in leftovers:
+        # 先按 (下装, 鞋) 组合去重地取，凑不满 3 套才允许重复组合。
+        picked: list[list[RuleItem]] = []
+        used_combos: set[tuple[object, ...]] = set()
+        leftovers: list[list[RuleItem]] = []
+        for _score_value, combo, outfit in decorated:
+            if combo in used_combos:
+                leftovers.append(outfit)
+                continue
+            used_combos.add(combo)
             picked.append(outfit)
             if len(picked) == MAX_OUTFITS:
                 break
 
-    outfits = tuple(
-        OutfitPlan(
-            items=tuple(outfit),
-            reason=_reason(facts, outfit, want_outer=want_outer, want_extra=want_extra),
-        )
-        for outfit in picked
-    )
+        if len(picked) < MAX_OUTFITS:
+            for outfit in leftovers:
+                picked.append(outfit)
+                if len(picked) == MAX_OUTFITS:
+                    break
 
-    notice = _notice(missing, len(outfits))
-    return RecommendPlan(outfits=outfits, notice=notice)
+        outfits = tuple(
+            OutfitPlan(
+                items=tuple(outfit),
+                reason=_reason(facts, outfit, want_outer=want_outer, want_extra=want_extra),
+                relaxed_occasion=relaxed,
+            )
+            for outfit in picked
+        )
+        return outfits, missing
+
+    # 严格按场合过滤：目标场合 + 无场合（通用）的单品
+    strict_pool = [item for item in items if _usable(item, occasion)]
+    outfits, missing = assemble(strict_pool, relaxed=False)
+    if outfits:
+        return RecommendPlan(outfits=outfits, notice=_notice(missing, len(outfits)))
+
+    # 兜底：指定了场合却组不出 ≥1 套时，放宽到全量（不按场合过滤）再试一次。
+    # 只放宽场合，品类与厚薄约束不变；组出的套标记 relaxed_occasion，notice 如实说明。
+    if occasion:
+        relaxed_outfits, relaxed_missing = assemble(items, relaxed=True)
+        if relaxed_outfits:
+            return RecommendPlan(outfits=relaxed_outfits, notice=_relaxed_notice(occasion))
+        return RecommendPlan(outfits=(), notice=_notice(relaxed_missing, 0))
+
+    return RecommendPlan(outfits=(), notice=_notice(missing, 0))
 
 
 def _notice(missing: list[str], count: int) -> str | None:
@@ -379,3 +399,9 @@ def _notice(missing: list[str], count: int) -> str | None:
     if count < MAX_OUTFITS:
         return f"衣橱里没有{joined}，只能组出 {count} 套"
     return f"衣橱里没有{joined}，搭配可能不完整"
+
+
+def _relaxed_notice(occasion: str) -> str:
+    """场合不足兜底时的诚实说明：不假装这些都是专门为该场合的。"""
+    label = OCCASION_LABELS.get(occasion, occasion)
+    return f"专门为{label}场合的衣服不够，这几套里有些不是专门为{label}的，你看着挑"

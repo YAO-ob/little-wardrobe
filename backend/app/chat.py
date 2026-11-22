@@ -484,6 +484,12 @@ def _empty_outfit_reply(ctx: ToolContext) -> str:
     )
 
 
+def _relaxed_reply(ctx: ToolContext) -> str:
+    """场合不足兜底出套时的诚实说明：不假装这些都是专门为该场合的。"""
+    label = OCCASION_LABEL.get(ctx.occasion or "", "这个场景")
+    return f"专门为{label}场合的衣服不太够，这几套里有些不是专门为{label}的，你看着挑。"
+
+
 def _history_messages(payload: ChatIn) -> list[dict]:
     history = payload.history[-HISTORY_LIMIT:]
     return [
@@ -522,7 +528,9 @@ def _rules_outfits(ctx: ToolContext) -> list[RecommendOutfitOut]:
         return []
     thumbs = {row.id: primary_thumb(row) for row in ctx.rows}
     return [
-        recommend_service.outfit_out(outfit.items, outfit.reason, thumbs)
+        recommend_service.outfit_out(
+            outfit.items, outfit.reason, thumbs, relaxed_occasion=outfit.relaxed_occasion
+        )
         for outfit in plan.outfits
     ]
 
@@ -720,8 +728,11 @@ async def chat(
         )
         text = reply or _template_reply(final_intent, ctx.occasion, parsed.scene, ctx, scope_note)
         # 推荐意图但组不出套：丢掉模型那句话，用真实件数拼的建议（模型会编、会说空话）
+        has_relaxed = any(getattr(o, "relaxed_occasion", False) for o in outfits)
         if final_intent == "recommend" and not outfits:
             text = _empty_outfit_reply(ctx)
+        elif final_intent == "recommend" and has_relaxed:
+            text = _relaxed_reply(ctx)
         return ChatOut(
             reply=text,
             intent=final_intent,

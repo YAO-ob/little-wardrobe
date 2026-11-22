@@ -68,7 +68,10 @@ def record_metric(
 
 
 def outfit_out(
-    items: tuple[RuleItem, ...] | list[RuleItem], reason: str, thumbs: dict[int, str | None]
+    items: tuple[RuleItem, ...] | list[RuleItem],
+    reason: str,
+    thumbs: dict[int, str | None],
+    relaxed_occasion: bool = False,
 ) -> RecommendOutfitOut:
     return RecommendOutfitOut(
         items=[
@@ -82,6 +85,7 @@ def outfit_out(
             for item in items
         ],
         reason=reason,
+        relaxed_occasion=relaxed_occasion,
     )
 
 
@@ -142,7 +146,10 @@ async def build_recommendation(
     )
 
     plan = build_outfits(facts, list(by_id.values()), occasion)
-    outfits = [outfit_out(outfit.items, outfit.reason, thumbs) for outfit in plan.outfits]
+    outfits = [
+        outfit_out(outfit.items, outfit.reason, thumbs, relaxed_occasion=outfit.relaxed_occasion)
+        for outfit in plan.outfits
+    ]
     notice = plan.notice
 
     source = "rules"

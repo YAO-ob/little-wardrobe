@@ -354,3 +354,53 @@ def test_single_bottom_still_returns_three_outfits():
     assert len(plan.outfits) == 3
     for outfit in plan.outfits:
         assert {"top", "bottom", "shoes"} <= categories(outfit)
+
+
+# --- 场合不足兜底 ---------------------------------------------------------
+
+
+def _mild() -> WeatherFacts:
+    """12-18℃：厚薄中档、不需要外套，基础三件套即可组出。"""
+    return WeatherFacts(date="2026-11-21", feels_min=12.0, feels_max=18.0)
+
+
+def test_occasion_shortage_falls_back_to_relaxed():
+    """目标场合缺核心品类时，放宽到全量重出，套数非空且带 relaxed 标记。"""
+    # formal 场合：top / bottom 是 formal，但鞋只有 casual 的
+    # 严格过滤后缺鞋 → 0 套；兜底放宽后用 casual 的鞋组出
+    items = [
+        RuleItem(1, "top", 2, ["formal"]),
+        RuleItem(2, "bottom", 2, ["formal"]),
+        RuleItem(3, "shoes", 2, ["casual"]),
+    ]
+    plan = build_outfits(_mild(), items, occasion="formal")
+
+    assert len(plan.outfits) >= 1
+    assert all(o.relaxed_occasion for o in plan.outfits)
+    assert plan.notice and "正式" in plan.notice
+    ids = {i.id for o in plan.outfits for i in o.items}
+    assert 3 in ids  # 兜底来的 casual 鞋被用上了
+
+
+def test_occasion_sufficient_does_not_relax():
+    """目标场合能组出时不触发兜底，所有套 relaxed 全 False，行为与原来一致。"""
+    plan = build_outfits(_mild(), wardrobe(), occasion="formal")
+    assert plan.outfits
+    assert all(not o.relaxed_occasion for o in plan.outfits)
+    # 仍然只挑 formal 或无场合的单品，不混入其他场合专属
+    for outfit in plan.outfits:
+        for item in outfit.items:
+            assert not item.occasion or "formal" in item.occasion
+
+
+def test_relaxed_still_empty_when_category_missing():
+    """放宽后仍缺核心品类（比如连鞋都没有）→ 返回空 + notice，不硬凑。"""
+    items = [
+        RuleItem(1, "top", 2, ["formal"]),
+        RuleItem(2, "bottom", 2, ["casual"]),
+        # 没有鞋，任何场合都没有
+    ]
+    plan = build_outfits(_mild(), items, occasion="formal")
+
+    assert plan.outfits == ()
+    assert plan.notice and "鞋" in plan.notice

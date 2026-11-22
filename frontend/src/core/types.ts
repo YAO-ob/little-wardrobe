@@ -99,6 +99,8 @@ export interface RecommendItem {
 export interface RecommendOutfit {
   items: RecommendItem[]
   reason: string
+  /** true = 这套掺了不是专门为目标场合的单品（场合不足时的兜底） */
+  relaxed_occasion?: boolean
 }
 
 export interface RecommendResult {

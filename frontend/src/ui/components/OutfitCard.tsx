@@ -40,7 +40,14 @@ export default function OutfitCard({
         ))}
       </div>
 
-      <p className="text-sm leading-5 text-black/70">{outfit.reason}</p>
+      <p className="text-sm leading-5 text-black/70">
+        {outfit.relaxed_occasion && (
+          <span className="mr-1.5 inline-block rounded-full bg-amber-50 px-1.5 py-0.5 text-xs text-amber-700 ring-1 ring-inset ring-amber-200 align-middle">
+            通用款
+          </span>
+        )}
+        {outfit.reason}
+      </p>
 
       {onSave && (
         <button
