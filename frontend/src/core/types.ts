@@ -19,7 +19,7 @@ export interface Item {
   color_family?: string | null
   color_hex?: string | null
   season: string[]
-  occasion?: Occasion | null
+  occasion?: Occasion[]
   warmth?: Warmth | null
   formality?: number | null
   layer?: Layer | null
@@ -49,7 +49,7 @@ export interface NewItem {
   color_family?: string | null
   color_hex?: string | null
   season?: string[]
-  occasion?: Occasion | null
+  occasion?: Occasion[]
   warmth?: Warmth | null
   formality?: number | null
   layer?: Layer | null

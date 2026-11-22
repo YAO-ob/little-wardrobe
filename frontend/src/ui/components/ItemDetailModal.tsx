@@ -34,7 +34,7 @@ function initialForm(item: Item): ItemFormValues {
   return {
     category: item.category,
     warmth: item.warmth == null ? '' : String(item.warmth),
-    occasion: item.occasion ?? '',
+    occasion: item.occasion ?? [],
     color_family: item.color_family ?? '',
     brand: item.brand ?? '',
     material: item.material ?? '',
@@ -132,6 +132,15 @@ export default function ItemDetailModal({ item, onClose }: { item: Item; onClose
       form.season.includes(value)
         ? form.season.filter((item2) => item2 !== value)
         : [...form.season, value],
+    )
+  }
+
+  function toggleOccasion(value: string) {
+    update(
+      'occasion',
+      form.occasion.includes(value)
+        ? form.occasion.filter((o) => o !== value)
+        : [...form.occasion, value],
     )
   }
 
@@ -273,33 +282,26 @@ export default function ItemDetailModal({ item, onClose }: { item: Item; onClose
           )}
 
           <div>
-            <p className="mb-1 text-[11px] text-black/50">场合（决定筛选）</p>
-            <div className="grid grid-cols-5 gap-1.5">
-              {OCCASIONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => update('occasion', option.value)}
-                  className={`rounded-xl border py-1.5 text-xs ${
-                    form.occasion === option.value
-                      ? 'border-black bg-black text-white'
-                      : 'border-black/10 bg-white text-black/70'
-                  }`}
-                >
-                  {option.label}
-                </button>
-              ))}
-              <button
-                type="button"
-                onClick={() => update('occasion', '')}
-                className={`rounded-xl border py-1.5 text-xs ${
-                  form.occasion === ''
-                    ? 'border-black bg-black text-white'
-                    : 'border-black/10 bg-white text-black/70'
-                }`}
-              >
-                不填
-              </button>
+            <p className="mb-1 text-[11px] text-black/50">场合（可多选，不选 = 任何场合都能穿）</p>
+            <div className="grid grid-cols-4 gap-1.5">
+              {OCCASIONS.map((option) => {
+                const active = form.occasion.includes(option.value)
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => toggleOccasion(option.value)}
+                    aria-pressed={active}
+                    className={`rounded-xl border py-1.5 text-xs ${
+                      active
+                        ? 'border-black bg-black text-white'
+                        : 'border-black/10 bg-white text-black/70'
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                )
+              })}
             </div>
           </div>
         </section>

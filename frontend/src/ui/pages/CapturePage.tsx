@@ -11,7 +11,7 @@ import {
 } from '../../core/capturePrefill'
 import { appendDrafts, makeDraftId } from '../../core/drafts'
 import { resolveImageId } from '../../core/uploadOnce'
-import { CATEGORIES, OCCASIONS, WARMTHS } from '../../core/labels'
+import { CATEGORIES, WARMTHS } from '../../core/labels'
 import { isTextEntry, resolveShortcut } from '../../core/shortcuts'
 import type { Category, Occasion, Warmth } from '../../core/types'
 import { createPreview, releasePreview } from '../../adapters/image'
@@ -27,7 +27,7 @@ interface Draft {
   preview: string
   category: Category | null
   warmth: Warmth | null
-  occasion: Occasion | null
+  occasion: Occasion[]
   categorySource: FieldSource | null
   warmthSource: FieldSource | null
   // 识别给的颜色家族；录入页没有颜色按钮（不为它牺牲「三次点击」），保存时直接采用
@@ -45,7 +45,7 @@ function newDraft(file: File): Draft {
     preview: createPreview(file),
     category: null,
     warmth: null,
-    occasion: null,
+    occasion: [],
     categorySource: null,
     warmthSource: null,
     colorFamily: null,
@@ -129,10 +129,6 @@ export default function CapturePage({ onClose }: { onClose: () => void }) {
     setError(null)
   }, [])
 
-  const patch = useCallback((changes: Partial<Draft>) => {
-    setDrafts((prev) => (prev.length === 0 ? prev : [{ ...prev[0], ...changes }, ...prev.slice(1)]))
-  }, [])
-
   const updateById = useCallback((id: string, fn: (draft: Draft) => Draft) => {
     setDrafts((prev) => prev.map((draft) => (draft.id === id ? fn(draft) : draft)))
   }, [])
@@ -200,6 +196,8 @@ export default function CapturePage({ onClose }: { onClose: () => void }) {
           ...mergeSuggestion(draft, suggestion),
           suggestion,
           colorFamily: result.color_family ?? draft.colorFamily,
+          // 场合由 AI 预填，录入页不再让用户选；空数组 = 看不清 / 任何场合可用
+          occasion: result.occasion ?? draft.occasion,
         }))
       } catch {
         // 识别失败静默降级，不影响录入
@@ -445,26 +443,6 @@ export default function CapturePage({ onClose }: { onClose: () => void }) {
                 </div>
                 </section>
               )}
-
-              <section>
-                <p className="mb-2 text-xs font-medium text-black/50">场合</p>
-                <div className="grid grid-cols-4 gap-2">
-                  {OCCASIONS.map((o) => (
-                    <button
-                      key={o.value}
-                      type="button"
-                      onClick={() => patch({ occasion: o.value })}
-                      className={`rounded-xl border py-2 text-sm transition ${
-                        current.occasion === o.value
-                          ? 'border-black bg-black text-white'
-                          : 'border-black/10 bg-white text-black/80'
-                      }`}
-                    >
-                      {o.label}
-                    </button>
-                  ))}
-                </div>
-              </section>
 
               {error && <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
 

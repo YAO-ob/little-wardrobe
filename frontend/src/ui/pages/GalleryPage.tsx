@@ -310,7 +310,9 @@ export default function GalleryPage() {
                       {item.warmth ? ` · ${WARMTH_LABEL[item.warmth]}` : ''}
                     </p>
                     <p className="truncate text-[11px] text-black/40">
-                      {item.occasion ? OCCASION_LABEL[item.occasion] : '未填场合'}
+                      {item.occasion?.length
+                        ? item.occasion.map((o) => OCCASION_LABEL[o]).join(' · ')
+                        : '未填场合'}
                     </p>
                   </figcaption>
                 </figure>

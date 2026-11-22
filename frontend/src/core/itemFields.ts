@@ -59,7 +59,7 @@ export function isIncomplete(
   item: Pick<Item, 'category' | 'color_family' | 'occasion' | 'warmth'>,
 ): boolean {
   if (!item.color_family) return true
-  if (!item.occasion) return true
+  if (!item.occasion?.length) return true
   if (WITH_WARMTH.includes(item.category) && item.warmth == null) return true
   return false
 }

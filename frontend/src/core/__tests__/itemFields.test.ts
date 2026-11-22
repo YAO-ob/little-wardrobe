@@ -41,7 +41,7 @@ describe('isIncomplete', () => {
   const complete = {
     category: 'top' as Category,
     color_family: '黑',
-    occasion: 'casual' as const,
+    occasion: ['casual' as const],
     warmth: 2 as const,
   }
 
@@ -55,7 +55,7 @@ describe('isIncomplete', () => {
   })
 
   it('缺场合 → 标红', () => {
-    expect(isIncomplete({ ...complete, occasion: null })).toBe(true)
+    expect(isIncomplete({ ...complete, occasion: [] })).toBe(true)
   })
 
   it('上衣缺厚薄 → 标红', () => {
@@ -67,6 +67,8 @@ describe('isIncomplete', () => {
   })
 
   it('配饰只要颜色和场合齐了就完整', () => {
-    expect(isIncomplete({ category: 'accessory', color_family: '黑', occasion: 'sport', warmth: null })).toBe(false)
+    expect(
+      isIncomplete({ category: 'accessory', color_family: '黑', occasion: ['sport' as const], warmth: null }),
+    ).toBe(false)
   })
 })

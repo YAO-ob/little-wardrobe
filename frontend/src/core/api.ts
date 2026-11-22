@@ -55,7 +55,7 @@ export function listItems(filter: ItemFilter = {}): Promise<ItemList> {
 export function createItem(payload: {
   category: Category
   warmth?: Warmth | null
-  occasion?: Occasion | null
+  occasion?: Occasion[]
   color_family?: string | null
   name?: string
   image_ids?: number[]
@@ -76,6 +76,7 @@ export interface ClassifyResult {
   category: string | null
   warmth: number | null
   color_family: string | null
+  occasion: Occasion[]
   confidence: number | null
   source: 'llm' | 'none'
   reason: string | null

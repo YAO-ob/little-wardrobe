@@ -6,7 +6,7 @@ import { visibleFields, type FieldKey } from './itemFields'
 export interface ItemFormValues {
   category: Category
   warmth: string
-  occasion: string
+  occasion: string[]
   color_family: string
   brand: string
   material: string
@@ -72,9 +72,8 @@ export function buildItemPatch(form: ItemFormValues, initial: Item): Record<stri
     patch.warmth = form.warmth === '' ? null : Number(form.warmth)
   }
 
-  const initialOccasion = initial.occasion ?? ''
-  if (form.occasion !== initialOccasion) {
-    patch.occasion = form.occasion === '' ? null : form.occasion
+  if (!sameList(form.occasion, initial.occasion ?? [])) {
+    patch.occasion = form.occasion.length > 0 ? form.occasion : null
   }
 
   const textFields: [keyof ItemFormValues, keyof Item][] = [

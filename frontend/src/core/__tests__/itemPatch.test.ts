@@ -24,7 +24,7 @@ function form(overrides: Partial<ItemFormValues> = {}): ItemFormValues {
   return {
     category: 'top',
     warmth: '',
-    occasion: '',
+    occasion: [],
     color_family: '黑',
     brand: '',
     material: '',
@@ -94,15 +94,15 @@ describe('buildItemPatch', () => {
   })
 
   it('只改场合 → patch 里只有 occasion', () => {
-    const item: Item = { ...baseItem, occasion: 'casual' }
-    const patch = buildItemPatch(form({ occasion: 'work' }), item)
+    const item: Item = { ...baseItem, occasion: ['casual'] }
+    const patch = buildItemPatch(form({ occasion: ['work'] }), item)
 
-    expect(patch).toEqual({ occasion: 'work' })
+    expect(patch).toEqual({ occasion: ['work'] })
   })
 
   it('场合改成不填 → occasion 是 null', () => {
-    const item: Item = { ...baseItem, occasion: 'casual' }
-    const patch = buildItemPatch(form({ occasion: '' }), item)
+    const item: Item = { ...baseItem, occasion: ['casual'] }
+    const patch = buildItemPatch(form({ occasion: [] }), item)
 
     expect(patch).toEqual({ occasion: null })
   })
