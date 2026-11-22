@@ -132,6 +132,12 @@ def create_item(payload: ItemCreate, db: Session = Depends(get_db)) -> ItemOut:
         brand=payload.brand,
         price=payload.price,
         purchased_at=payload.purchased_at,
+        size=payload.size,
+        purchase_url=payload.purchase_url,
+        care_text=payload.care_text,
+        care_symbols=(
+            json.dumps(payload.care_symbols, ensure_ascii=False) if payload.care_symbols else None
+        ),
         note=payload.note,
     )
     db.add(item)
@@ -191,6 +197,9 @@ def update_item(item_id: int, payload: ItemUpdate, db: Session = Depends(get_db)
     if "season" in data:
         season = data.pop("season") or []
         item.season = json.dumps(season, ensure_ascii=False) if season else None
+    if "care_symbols" in data:
+        symbols = data.pop("care_symbols") or []
+        item.care_symbols = json.dumps(symbols, ensure_ascii=False) if symbols else None
     for field, value in data.items():
         setattr(item, field, value)
     item.updated_at = utcnow()

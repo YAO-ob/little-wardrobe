@@ -1,5 +1,6 @@
 import type {
   Category,
+  ChatReply,
   ItemFilter,
   ItemList,
   Occasion,
@@ -63,6 +64,66 @@ export function createItem(payload: {
 
 export function deleteItem(id: number): Promise<void> {
   return request(`/items/${id}`, { method: 'DELETE' })
+}
+
+/** 删掉提前上传、但最终没建单品的暂存图（避免孤儿文件）。 */
+export function deleteImage(id: number): Promise<void> {
+  return request(`/images/${id}`, { method: 'DELETE' })
+}
+
+export interface ClassifyResult {
+  category: string | null
+  warmth: number | null
+  confidence: number | null
+  source: 'llm' | 'none'
+  reason: string | null
+}
+
+export interface ReceiptResult {
+  brand: string | null
+  price: number | null
+  material: string | null
+  color_family: string | null
+  size: string | null
+  confidence: number | null
+  source: 'llm' | 'none'
+  reason: string | null
+}
+
+/** 从购物截图提取商品信息（建议值，不落库）。 */
+export function extractReceipt(file: File, llmKey?: string): Promise<ReceiptResult> {
+  const form = new FormData()
+  form.append('file', file)
+  return request<ReceiptResult>('/items/extract-receipt', {
+    method: 'POST',
+    body: form,
+    headers: llmKey ? { 'X-LLM-Key': llmKey } : undefined,
+  })
+}
+
+export function sendChat(payload: {  message: string
+  city?: string
+  excludeIds?: number[]
+  mode?: 'rules' | 'llm'
+  llmKey?: string
+}): Promise<ChatReply> {
+  return request<ChatReply>('/chat', {
+    method: 'POST',
+    body: JSON.stringify({
+      message: payload.message,
+      city: payload.city,
+      exclude_ids: payload.excludeIds ?? [],
+      mode: payload.mode ?? 'rules',
+    }),
+    headers: payload.llmKey ? { 'X-LLM-Key': payload.llmKey } : undefined,
+  })
+}
+
+export function classifyImage(imageId: number, llmKey?: string): Promise<ClassifyResult> {  return request<ClassifyResult>('/classify', {
+    method: 'POST',
+    body: JSON.stringify({ image_id: imageId }),
+    headers: llmKey ? { 'X-LLM-Key': llmKey } : undefined,
+  })
 }
 
 export function updateItem(id: number, patch: Record<string, unknown>): Promise<import('./types').Item> {

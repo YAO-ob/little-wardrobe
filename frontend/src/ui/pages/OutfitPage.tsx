@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import { getCities, getOutfits, getRecommend, saveOutfit } from '../../core/api'
-import { CATEGORIES, CATEGORY_LABEL, OCCASIONS } from '../../core/labels'
+import { CATEGORIES, OCCASIONS } from '../../core/labels'
 import { DEFAULT_CITY, FALLBACK_CITIES } from '../../core/cities'
 import { badgeFor, maskKey } from '../../core/recommendBadge'
 import { weatherAgeText } from '../../core/weatherAge'
-import type { Category, Occasion, RecommendOutfit } from '../../core/types'
+import type { Occasion, RecommendOutfit } from '../../core/types'
 import { getLlmKey, setLlmKey, clearLlmKey } from '../../adapters/llmKey'
+import { getAutoClassify, setAutoClassify } from '../../adapters/autoClassify'
 import { getCity, setCity } from '../../adapters/city'
 import { toast } from '../../adapters/toast'
+import OutfitCard from '../components/OutfitCard'
 
 // 模型正常 0.8–1.2s；后端最坏会等 ~10.5s（天气重试）。超过这个就退回规则，别让用户干等
 const SLOW_TIMEOUT_MS = 12_000
@@ -59,6 +61,7 @@ export default function OutfitPage() {
   const [city, setCityState] = useState<string>(() => getCity(FALLBACK_CITIES))
   const [cityOpen, setCityOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
+  const [autoClassify, setAutoClassifyState] = useState(() => getAutoClassify())
   const [draftKey, setDraftKey] = useState('')
   // 弹层两态：editing=true 显示输入框；false 显示「已配置」状态
   const [editing, setEditing] = useState(false)
@@ -355,39 +358,13 @@ export default function OutfitPage() {
         const isSaved = savedKeys.includes(key)
         const isSaving = savingKey === key
         return (
-          <article key={key} className="space-y-2 rounded-2xl bg-white p-3 shadow-sm">
-            <div className="flex gap-1.5 overflow-x-auto pb-0.5">
-              {outfit.items.map((item) => (
-                <div
-                  key={item.id}
-                  className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-black/5 text-lg"
-                >
-                  {item.thumb_url ? (
-                    <img
-                      src={item.thumb_url}
-                      alt={CATEGORY_LABEL[item.category as Category] ?? item.category}
-                      className="h-full w-full object-cover"
-                    />
-                  ) : (
-                    <span>🧺</span>
-                  )}
-                </div>
-              ))}
-            </div>
-
-            <p className="text-sm leading-5 text-black/70">{outfit.reason}</p>
-
-            <button
-              type="button"
-              onClick={() => void save(outfit, index)}
-              disabled={isSaved || isSaving}
-              className={`w-full rounded-xl py-2.5 text-sm font-medium transition ${
-                isSaved ? 'bg-black/5 text-black/40' : 'bg-black text-white disabled:opacity-40'
-              }`}
-            >
-              {isSaved ? '已保存' : isSaving ? '保存中…' : '就穿这套'}
-            </button>
-          </article>
+          <OutfitCard
+            key={key}
+            outfit={outfit}
+            onSave={() => void save(outfit, index)}
+            saved={isSaved}
+            saving={isSaving}
+          />
         )
       })}
 
@@ -550,6 +527,32 @@ export default function OutfitPage() {
                 </div>
               </>
             )}
+
+            <div className="flex items-center justify-between gap-3 border-t border-black/5 pt-3">
+              <div>
+                <p className="text-sm">录入时自动识别</p>
+                <p className="text-[11px] text-black/40">选图后预填品类和厚薄，只给建议，不覆盖你的选择</p>
+              </div>
+              <button
+                type="button"
+                role="switch"
+                aria-checked={autoClassify}
+                onClick={() => {
+                  const next = !autoClassify
+                  setAutoClassify(next)
+                  setAutoClassifyState(next)
+                }}
+                className={`relative h-6 w-11 shrink-0 rounded-full transition-colors ${
+                  autoClassify ? 'bg-black' : 'bg-black/15'
+                }`}
+              >
+                <span
+                  className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition-all ${
+                    autoClassify ? 'left-[1.375rem]' : 'left-0.5'
+                  }`}
+                />
+              </button>
+            </div>
 
             <p className="text-[11px] leading-5 text-black/40">
               key 只存在本机浏览器（localStorage），请求时通过 X-LLM-Key 发给后端，不写日志。

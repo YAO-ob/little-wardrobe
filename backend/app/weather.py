@@ -28,6 +28,10 @@ TIMEOUT_SECONDS = 5.0
 # TLS 握手偶发超时：重试一次，间隔半秒
 RETRY_DELAY_SECONDS = 0.5
 CACHE_TTL_SECONDS = 2 * 60 * 60  # 2 小时，写死
+# 上游失败后冷却多久不再打它：只为避免「每个请求都白等两次超时」。
+# 冷却只对「有兜底数据可返回」的情况生效，否则首次仍然会 502。
+DEFAULT_COOLDOWN_SECONDS = 60.0
+_cooldown_until: float = 0.0
 
 
 def api_url() -> str:
@@ -120,6 +124,26 @@ _cache: dict[tuple[float, float, str], tuple[float, str, WeatherSnapshot]] = {}
 
 def clear_cache() -> None:
     _cache.clear()
+
+
+def cooldown_seconds() -> float:
+    raw = os.environ.get("EW_WEATHER_COOLDOWN_SECONDS", "").strip()
+    if not raw:
+        return DEFAULT_COOLDOWN_SECONDS
+    try:
+        value = float(raw)
+    except ValueError:
+        return DEFAULT_COOLDOWN_SECONDS
+    return max(0.0, value)
+
+
+def clear_cooldown() -> None:
+    global _cooldown_until
+    _cooldown_until = 0.0
+
+
+def in_cooldown(now: float | None = None) -> bool:
+    return (now if now is not None else time.monotonic()) < _cooldown_until
 
 
 def now_iso() -> str:
@@ -312,9 +336,40 @@ async def get_weather(city_name: str | None) -> WeatherResult:
         )
         return WeatherResult(snapshot, cached=True, stale=False, observed_at=snapshot.date, fetched_at=fetched_at)
 
+    # 冷却期：上游刚失败过，有兜底就直接用，别再白等两次超时。
+    # 没有兜底数据时必须继续试上游，否则首次请求会永远 502。
+    if in_cooldown():
+        last = _last_success(key)
+        if last is not None:
+            snapshot, fetched_at = last
+            logger.warning(
+                "weather city=%s date=%s cache=stale cooldown=1 elapsed_ms=%.0f",
+                city.name,
+                date,
+                (time.perf_counter() - started) * 1000,
+            )
+            return WeatherResult(
+                snapshot, cached=True, stale=True, observed_at=snapshot.date, fetched_at=fetched_at
+            )
+
+        saved = _load_snapshot(city)
+        if saved is not None:
+            snapshot, fetched_at = saved
+            logger.warning(
+                "weather city=%s date=%s cache=db_stale cooldown=1 elapsed_ms=%.0f",
+                city.name,
+                date,
+                (time.perf_counter() - started) * 1000,
+            )
+            return WeatherResult(
+                snapshot, cached=True, stale=True, observed_at=snapshot.date, fetched_at=fetched_at
+            )
+
     try:
         snapshot = await fetch_daily(city, date)
     except UpstreamError:
+        global _cooldown_until
+        _cooldown_until = time.monotonic() + cooldown_seconds()
         elapsed = (time.perf_counter() - started) * 1000
 
         # 第二级：进程内过期缓存
@@ -340,7 +395,7 @@ async def get_weather(city_name: str | None) -> WeatherResult:
             )
 
         logger.error(
-            "weather city=%s date=%s cache=miss elapsed_ms=%.0f upstream=failed",
+            "weather city=%s date=%s cache=miss elapsed_ms=%.0f upstream=failed cooldown=1",
             city.name,
             date,
             elapsed,
@@ -349,6 +404,7 @@ async def get_weather(city_name: str | None) -> WeatherResult:
 
     fetched_at = now_iso()
     _cache[key] = (time.monotonic(), fetched_at, snapshot)
+    _cooldown_until = 0.0  # 上游恢复了，冷却自然解除
     _save_snapshot(city, snapshot)
     logger.info(
         "weather city=%s date=%s cache=miss elapsed_ms=%.0f",

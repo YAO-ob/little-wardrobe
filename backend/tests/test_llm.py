@@ -1,4 +1,4 @@
-"""N4 测试：LLM 适配层 + 候选池校验 + 降级。全程 mock httpx，不打网络。"""
+﻿"""N4 测试：LLM 适配层 + 候选池校验 + 降级。全程 mock httpx，不打网络。"""
 
 from __future__ import annotations
 
@@ -116,6 +116,7 @@ def fake_http(monkeypatch):
     llm_cache.clear()
     limits.clear()
     weather.clear_cache()
+    weather.clear_cooldown()
     with SessionLocal() as db:
         db.execute(delete(WeatherSnapshotRow))
         db.commit()
@@ -633,6 +634,7 @@ def test_cache_is_keyed_by_weather(client):
     # 换一份天气（体感不同 → weather_hash 变）。
     # 天气服务自己有 2 小时快照缓存，这里要清掉才会真的重新取数
     weather.clear_cache()
+    weather.clear_cooldown()
     FakeClient.weather_override = {
         "daily": {
             **WEATHER_DAILY,

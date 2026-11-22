@@ -2,14 +2,16 @@ import { useState } from 'react'
 import CapturePage from './pages/CapturePage'
 import GalleryPage from './pages/GalleryPage'
 import OutfitPage from './pages/OutfitPage'
+import ChatPage from './pages/ChatPage'
 import Toast from './components/Toast'
 
-type Tab = 'capture' | 'gallery' | 'outfit'
+type Tab = 'capture' | 'gallery' | 'outfit' | 'chat'
 
 const TABS: { value: Tab; label: string; icon: string }[] = [
   { value: 'capture', label: '录入', icon: '📷' },
   { value: 'gallery', label: '图库', icon: '🧺' },
   { value: 'outfit', label: '搭配', icon: '👕' },
+  { value: 'chat', label: '问问', icon: '💬' },
 ]
 
 export default function App() {
@@ -26,13 +28,14 @@ export default function App() {
         {tab === 'capture' && <CapturePage onOpenGallery={() => setTab('gallery')} />}
         {tab === 'gallery' && <GalleryPage />}
         {tab === 'outfit' && <OutfitPage />}
+        {tab === 'chat' && <ChatPage />}
       </main>
 
       <nav
         aria-label="主导航"
         className="fixed inset-x-0 bottom-0 z-20 mx-auto max-w-xl border-t border-black/5 bg-paper/95 pb-[env(safe-area-inset-bottom)] backdrop-blur"
       >
-        <div className="grid grid-cols-3 px-2">
+        <div className="grid grid-cols-4 px-1">
           {TABS.map((item) => {
             const active = tab === item.value
             return (
@@ -41,18 +44,18 @@ export default function App() {
                 type="button"
                 onClick={() => setTab(item.value)}
                 aria-current={active ? 'page' : undefined}
-                className={`relative flex min-h-14 flex-col items-center justify-center gap-0.5 py-2 text-[11px] transition-colors ${
+                className={`relative flex min-h-14 flex-col items-center justify-center gap-0.5 py-2 text-[10px] transition-colors ${
                   active ? 'font-medium text-black' : 'text-black/45'
                 }`}
               >
                 <span
                   aria-hidden="true"
-                  className={`absolute inset-x-6 top-0 h-0.5 rounded-full ${
+                  className={`absolute inset-x-4 top-0 h-0.5 rounded-full ${
                     active ? 'bg-black' : 'bg-transparent'
                   }`}
                 />
-                <span className="text-lg leading-none">{item.icon}</span>
-                <span>{item.label}</span>
+                <span className="text-base leading-none">{item.icon}</span>
+                <span className="whitespace-nowrap">{item.label}</span>
               </button>
             )
           })}

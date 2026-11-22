@@ -30,6 +30,10 @@ function form(overrides: Partial<ItemFormValues> = {}): ItemFormValues {
     season: ['spring'],
     price: '100',
     note: '',
+    size: '',
+    purchase_url: '',
+    care_text: '',
+    care_symbols: [],
     ...overrides,
   }
 }
@@ -53,6 +57,10 @@ describe('buildItemPatch', () => {
         layer: 'inner',
         season: ['spring', 'autumn'],
         price: '199.5',
+        size: 'M',
+        purchase_url: 'https://example.com/p/1',
+        care_text: '30℃ 机洗',
+        care_symbols: ['wash_30', 'no_bleach'],
       }),
       baseItem,
     )
@@ -64,9 +72,22 @@ describe('buildItemPatch', () => {
       layer: 'inner',
       season: ['spring', 'autumn'],
       price: 199.5,
+      size: 'M',
+      purchase_url: 'https://example.com/p/1',
+      care_text: '30℃ 机洗',
+      care_symbols: ['wash_30', 'no_bleach'],
     })
     expect('material' in patch).toBe(false)
     expect('note' in patch).toBe(false)
+  })
+
+  it('洗护符号没变时不出现在 patch 里', () => {
+    const withCare: Item = { ...baseItem, care_symbols: ['wash_30'] }
+    const patch = buildItemPatch(form({ care_symbols: ['wash_30'] }), withCare)
+    expect('care_symbols' in patch).toBe(false)
+
+    const changed = buildItemPatch(form({ care_symbols: ['no_bleach'] }), withCare)
+    expect(changed.care_symbols).toEqual(['no_bleach'])
   })
 })
 

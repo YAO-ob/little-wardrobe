@@ -1,9 +1,11 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { deleteItem, updateItem } from '../../core/api'
+import { deleteItem, extractReceipt, updateItem } from '../../core/api'
 import { buildItemPatch, validateItemForm, type ItemFormValues } from '../../core/itemPatch'
-import { CATEGORY_LABEL, WARMTH_LABEL } from '../../core/labels'
+import { mergeReceipt } from '../../core/receiptMerge'
+import { CATEGORY_LABEL, CARE_EXCLUSIVE_GROUPS, CARE_SYMBOLS, WARMTH_LABEL } from '../../core/labels'
 import type { Category, Item } from '../../core/types'
+import { getLlmKey } from '../../adapters/llmKey'
 import { toast } from '../../adapters/toast'
 
 const LAYERS = [
@@ -30,6 +32,10 @@ function initialForm(item: Item): ItemFormValues {
     season: item.season ?? [],
     price: item.price == null ? '' : String(item.price),
     note: item.note ?? '',
+    size: item.size ?? '',
+    purchase_url: item.purchase_url ?? '',
+    care_text: item.care_text ?? '',
+    care_symbols: item.care_symbols ?? [],
   }
 }
 
@@ -42,14 +48,69 @@ export default function ItemDetailModal({ item, onClose }: { item: Item; onClose
   const [errors, setErrors] = useState<Partial<Record<keyof ItemFormValues, string>>>({})
   const [saving, setSaving] = useState(false)
   const [confirmingDelete, setConfirmingDelete] = useState(false)
+  const [recognizing, setRecognizing] = useState(false)
+  const [recognized, setRecognized] = useState<Set<string>>(new Set())
+  const [receiptNotice, setReceiptNotice] = useState<string | null>(null)
+  const receiptInputRef = useRef<HTMLInputElement>(null)
 
   function update<K extends keyof ItemFormValues>(key: K, value: ItemFormValues[K]) {
     setForm((prev) => ({ ...prev, [key]: value }))
+    setRecognized((prev) => {
+      if (!prev.has(key)) return prev
+      const next = new Set(prev)
+      next.delete(key)
+      return next
+    })
     setErrors((prev) => {
       const next = { ...prev }
       delete next[key]
       return next
     })
+  }
+
+  function mark(key: string) {
+    if (!recognized.has(key)) return null
+    return (
+      <span className="ml-1 rounded bg-black/10 px-1 py-0.5 text-[9px] leading-none text-black/50">
+        识别
+      </span>
+    )
+  }
+
+  async function handleReceipt(file: File | null | undefined) {
+    if (!file) return
+    setReceiptNotice(null)
+    setRecognizing(true)
+    try {
+      const result = await extractReceipt(file, getLlmKey() || undefined)
+      if (result.source !== 'llm') {
+        setReceiptNotice(
+          result.reason === 'no_key'
+            ? '没配置 API key，暂时无法识别'
+            : '没能识别出信息，可以手动填写',
+        )
+        return
+      }
+      const merged = mergeReceipt(
+        {
+          brand: form.brand,
+          price: form.price,
+          material: form.material,
+          color_family: form.color_family,
+          size: form.size,
+        },
+        result,
+      )
+      setForm((prev) => ({ ...prev, ...merged.form }))
+      setRecognized(new Set(merged.filled))
+      if (merged.filled.length === 0) {
+        setReceiptNotice('识别到的字段你都已经填了，没有覆盖')
+      }
+    } catch (err) {
+      setReceiptNotice(err instanceof Error ? err.message : '识别失败')
+    } finally {
+      setRecognizing(false)
+    }
   }
 
   function toggleSeason(value: string) {
@@ -59,6 +120,20 @@ export default function ItemDetailModal({ item, onClose }: { item: Item; onClose
         ? form.season.filter((item2) => item2 !== value)
         : [...form.season, value],
     )
+  }
+
+  function toggleCare(value: string) {
+    if (form.care_symbols.includes(value)) {
+      update(
+        'care_symbols',
+        form.care_symbols.filter((code) => code !== value),
+      )
+      return
+    }
+    // 同组只留一个：选新的就顶掉旧的
+    const group = CARE_EXCLUSIVE_GROUPS.find((codes) => codes.includes(value)) ?? []
+    const kept = form.care_symbols.filter((code) => !group.includes(code))
+    update('care_symbols', [...kept, value])
   }
 
   async function save() {
@@ -133,9 +208,33 @@ export default function ItemDetailModal({ item, onClose }: { item: Item; onClose
           />
         )}
 
+        <div className="mb-3 space-y-1">
+          <input
+            ref={receiptInputRef}
+            type="file"
+            accept="image/*"
+            className="sr-only"
+            onChange={(event) => {
+              const picked = event.target.files?.[0] ?? null
+              event.target.value = ''
+              void handleReceipt(picked)
+            }}
+          />
+          <button
+            type="button"
+            onClick={() => receiptInputRef.current?.click()}
+            disabled={recognizing}
+            className="w-full rounded-xl border border-dashed border-black/20 py-2 text-sm text-black/60 disabled:opacity-40"
+          >
+            {recognizing ? '正在识别…' : '从截图识别'}
+          </button>
+          <p className="text-[11px] text-black/35">截图会发送给你配置的模型服务商</p>
+          {receiptNotice && <p className="text-[11px] text-amber-700">{receiptNotice}</p>}
+        </div>
+
         <div className="grid grid-cols-2 gap-2">
           <label className="col-span-1 space-y-1">
-            <span className="text-[11px] text-black/50">颜色</span>
+            <span className="text-[11px] text-black/50">颜色 {mark('color_family')}</span>
             <input
               value={form.color_family}
               onChange={(event) => update('color_family', event.target.value)}
@@ -145,7 +244,7 @@ export default function ItemDetailModal({ item, onClose }: { item: Item; onClose
           </label>
 
           <label className="col-span-1 space-y-1">
-            <span className="text-[11px] text-black/50">品牌</span>
+            <span className="text-[11px] text-black/50">品牌 {mark('brand')}</span>
             <input
               value={form.brand}
               onChange={(event) => update('brand', event.target.value)}
@@ -154,7 +253,7 @@ export default function ItemDetailModal({ item, onClose }: { item: Item; onClose
           </label>
 
           <label className="col-span-1 space-y-1">
-            <span className="text-[11px] text-black/50">材质</span>
+            <span className="text-[11px] text-black/50">材质 {mark('material')}</span>
             <input
               value={form.material}
               onChange={(event) => update('material', event.target.value)}
@@ -163,7 +262,7 @@ export default function ItemDetailModal({ item, onClose }: { item: Item; onClose
           </label>
 
           <label className="col-span-1 space-y-1">
-            <span className="text-[11px] text-black/50">价格</span>
+            <span className="text-[11px] text-black/50">价格 {mark('price')}</span>
             <input
               value={form.price}
               onChange={(event) => update('price', event.target.value)}
@@ -227,6 +326,81 @@ export default function ItemDetailModal({ item, onClose }: { item: Item; onClose
               value={form.note}
               onChange={(event) => update('note', event.target.value)}
               className={fieldClass}
+            />
+          </label>
+
+          <label className="col-span-1 space-y-1">
+            <span className="text-[11px] text-black/50">尺码 {mark('size')}</span>
+            <input
+              value={form.size}
+              onChange={(event) => update('size', event.target.value)}
+              placeholder="M / 42 / One Size"
+              className={fieldClass}
+            />
+          </label>
+
+          <label className="col-span-1 space-y-1">
+            <span className="text-[11px] text-black/50">购买链接</span>
+            <input
+              value={form.purchase_url}
+              onChange={(event) => update('purchase_url', event.target.value)}
+              placeholder="https://"
+              className={fieldClass}
+            />
+            {/^https?:\/\//.test(form.purchase_url) && (
+              <a
+                href={form.purchase_url}
+                target="_blank"
+                rel="noreferrer"
+                className="text-[11px] text-blue-600 underline"
+              >
+                打开链接
+              </a>
+            )}
+          </label>
+
+          <div className="col-span-2 space-y-1">
+            <span className="text-[11px] text-black/50">
+              洗护符号
+              {form.care_symbols.length === 0 && <span className="ml-2 text-black/30">未填</span>}
+            </span>
+            <div className="flex flex-wrap gap-1.5">
+              {CARE_SYMBOLS.map((symbol) => {
+                const active = form.care_symbols.includes(symbol.value)
+                const group =
+                  CARE_EXCLUSIVE_GROUPS.find((codes) => codes.includes(symbol.value)) ?? []
+                const blocked =
+                  !active && group.some((code) => form.care_symbols.includes(code))
+                return (
+                  <button
+                    key={symbol.value}
+                    type="button"
+                    onClick={() => toggleCare(symbol.value)}
+                    disabled={blocked}
+                    aria-pressed={active}
+                    className={`rounded-full border px-2.5 py-1 text-[11px] ${
+                      active
+                        ? 'border-black bg-black text-white'
+                        : blocked
+                          ? 'border-black/5 bg-black/5 text-black/25'
+                          : 'border-black/10 bg-white text-black/60'
+                    }`}
+                  >
+                    {symbol.label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <label className="col-span-2 space-y-1">
+            <span className="text-[11px] text-black/50">洗护说明</span>
+            <textarea
+              value={form.care_text}
+              onChange={(event) => update('care_text', event.target.value)}
+              rows={2}
+              placeholder="比如：30℃ 机洗，反面晾干，不要漂白"
+              className={`${fieldClass} resize-none`}
             />
           </label>
         </div>

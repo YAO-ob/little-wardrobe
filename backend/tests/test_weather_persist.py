@@ -1,4 +1,4 @@
-"""W5d：天气快照落盘与三级降级。全 mock 上游，不联网。"""
+﻿"""W5d：天气快照落盘与三级降级。全 mock 上游，不联网。"""
 
 from __future__ import annotations
 
@@ -68,6 +68,7 @@ class FakeClient:
 @pytest.fixture(autouse=True)
 def fake_http(monkeypatch):
     weather.clear_cache()
+    weather.clear_cooldown()
     FakeClient.calls = 0
     FakeClient.fail = False
     monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
@@ -77,6 +78,7 @@ def fake_http(monkeypatch):
         db.commit()
     yield FakeClient
     weather.clear_cache()
+    weather.clear_cooldown()
 
 
 def snapshots() -> list[WeatherSnapshotRow]:
@@ -104,6 +106,7 @@ def test_success_updates_existing_row(client):
     first_fetched = snapshots()[0].fetched_at
 
     weather.clear_cache()
+    weather.clear_cooldown()
     client.get("/api/weather", params={"city": "杭州"})
 
     rows = snapshots()
@@ -115,7 +118,8 @@ def test_upstream_failure_falls_back_to_db_snapshot(client):
     # 先成功一次，落盘
     client.get("/api/weather", params={"city": "杭州"})
     saved = snapshots()[0]
-    weather.clear_cache()  # 模拟重启：内存没了，DB 还在
+    weather.clear_cache()
+    weather.clear_cooldown()  # 模拟重启：内存没了，DB 还在
 
     FakeClient.fail = True
     res = client.get("/api/weather", params={"city": "杭州"})
@@ -137,6 +141,7 @@ def test_upstream_failure_without_snapshot_returns_502(client):
 def test_recommend_still_works_from_db_snapshot(client):
     client.get("/api/weather", params={"city": "杭州"})
     weather.clear_cache()
+    weather.clear_cooldown()
     FakeClient.fail = True
 
     res = client.get("/api/recommend", params={"mode": "rules"})

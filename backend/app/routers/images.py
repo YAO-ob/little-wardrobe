@@ -79,5 +79,11 @@ def delete_staged_image(image_id: int, db: Session = Depends(get_db)) -> None:
     for rel in (image.path, image.thumb_path):
         if rel:
             (settings.media_dir / rel).unlink(missing_ok=True)
+    # 原图还留在 tmp/<stem>.<ext>（Image 只记派生图路径），按 stem 一并清掉，
+    # 否则「跳过」会在 tmp 里留下原图。
+    stem = Path(image.path).name.split("_")[0] if image.path else ""
+    if stem:
+        for leftover in settings.tmp_dir.glob(f"{stem}.*"):
+            leftover.unlink(missing_ok=True)
     db.delete(image)
     db.commit()

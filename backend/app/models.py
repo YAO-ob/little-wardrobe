@@ -41,6 +41,10 @@ class Item(Base):
     brand: Mapped[str | None] = mapped_column(String(64))
     price: Mapped[float | None] = mapped_column(Float)
     purchased_at: Mapped[str | None] = mapped_column(String(10))
+    size: Mapped[str | None] = mapped_column(String(16))
+    purchase_url: Mapped[str | None] = mapped_column(Text)
+    care_text: Mapped[str | None] = mapped_column(Text)
+    care_symbols: Mapped[str | None] = mapped_column(Text)  # JSON 数组字符串，编码表见 schemas
     note: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[str] = mapped_column(String(32), default=utcnow)
     updated_at: Mapped[str] = mapped_column(String(32), default=utcnow, onupdate=utcnow)

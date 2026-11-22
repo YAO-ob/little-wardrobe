@@ -11,6 +11,10 @@ export interface ItemFormValues {
   season: string[]
   price: string
   note: string
+  size: string
+  purchase_url: string
+  care_text: string
+  care_symbols: string[]
 }
 
 export type ItemFormErrors = Partial<Record<keyof ItemFormValues, string>>
@@ -59,6 +63,9 @@ export function buildItemPatch(form: ItemFormValues, initial: Item): Record<stri
     ['brand', 'brand'],
     ['material', 'material'],
     ['note', 'note'],
+    ['size', 'size'],
+    ['purchase_url', 'purchase_url'],
+    ['care_text', 'care_text'],
   ]
   for (const [formKey, itemKey] of textFields) {
     const current = String(form[formKey] ?? '')
@@ -78,6 +85,10 @@ export function buildItemPatch(form: ItemFormValues, initial: Item): Record<stri
 
   if (!sameList(form.season, initial.season ?? [])) {
     patch.season = form.season
+  }
+
+  if (!sameList(form.care_symbols, initial.care_symbols ?? [])) {
+    patch.care_symbols = form.care_symbols
   }
 
   const initialPrice = initial.price == null ? '' : String(initial.price)

@@ -5,11 +5,51 @@ from __future__ import annotations
 import json
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 Category = Literal["top", "outer", "bottom", "shoes", "accessory", "dress"]
 Occasion = Literal["casual", "work", "sport", "formal"]
 Layer = Literal["inner", "mid", "outer"]
+
+# 洗护符号只允许这 12 个编码：自由文本会让「30度/30℃/温水」三种写法并存，
+# 以后想按洗护方式筛选就没法做。
+CARE_SYMBOLS = (
+    "wash_30",
+    "wash_40",
+    "hand_wash",
+    "no_wash",
+    "bleach_ok",
+    "no_bleach",
+    "tumble_low",
+    "no_tumble",
+    "iron_low",
+    "no_iron",
+    "dry_clean",
+    "no_dry_clean",
+)
+
+
+# 互斥组：同一组最多选一个，否则语义矛盾（都「可漂白」了还「不可漂白」）
+CARE_EXCLUSIVE_GROUPS: tuple[tuple[str, ...], ...] = (
+    ("wash_30", "wash_40", "hand_wash", "no_wash"),
+    ("bleach_ok", "no_bleach"),
+    ("tumble_low", "no_tumble"),
+    ("iron_low", "no_iron"),
+    ("dry_clean", "no_dry_clean"),
+)
+
+
+def _validate_care_symbols(value: list[str] | None) -> list[str] | None:
+    if value is None:
+        return None
+    unknown = [code for code in value if code not in CARE_SYMBOLS]
+    if unknown:
+        raise ValueError(f"不认识的洗护符号：{'、'.join(unknown)}")
+    for group in CARE_EXCLUSIVE_GROUPS:
+        chosen = [code for code in value if code in group]
+        if len(chosen) > 1:
+            raise ValueError(f"洗护符号互斥：{'、'.join(chosen)} 只能选一个")
+    return value
 
 MEDIA_URL = "/media"
 
@@ -49,9 +89,15 @@ class ItemCreate(BaseModel):
     brand: str | None = None
     price: float | None = Field(default=None, ge=0)
     purchased_at: str | None = None
+    size: str | None = Field(default=None, max_length=16)
+    purchase_url: str | None = Field(default=None, max_length=500)
+    care_text: str | None = None
+    care_symbols: list[str] = Field(default_factory=list)
     note: str | None = None
     # 先传图后建单品：这里给已上传图片的 id
     image_ids: list[int] = Field(default_factory=list)
+
+    _care = field_validator("care_symbols")(_validate_care_symbols)
 
 
 class ItemUpdate(BaseModel):
@@ -69,7 +115,13 @@ class ItemUpdate(BaseModel):
     brand: str | None = None
     price: float | None = Field(default=None, ge=0)
     purchased_at: str | None = None
+    size: str | None = Field(default=None, max_length=16)
+    purchase_url: str | None = Field(default=None, max_length=500)
+    care_text: str | None = None
+    care_symbols: list[str] | None = None
     note: str | None = None
+
+    _care = field_validator("care_symbols")(_validate_care_symbols)
 
 
 class ItemOut(BaseModel):
@@ -90,6 +142,10 @@ class ItemOut(BaseModel):
     brand: str | None = None
     price: float | None = None
     purchased_at: str | None = None
+    size: str | None = None
+    purchase_url: str | None = None
+    care_text: str | None = None
+    care_symbols: list[str] = Field(default_factory=list)
     note: str | None = None
     created_at: str | None = None
     images: list[ImageOut] = Field(default_factory=list)
@@ -184,6 +240,41 @@ class OutfitCreate(BaseModel):
     note: str | None = None
 
 
+class ChatIn(BaseModel):
+    message: str = Field(default="", max_length=200)
+    city: str | None = None
+    occasion: str | None = None
+    exclude_ids: list[int] = Field(default_factory=list)
+    mode: Literal["rules", "llm"] = "rules"
+
+
+class ChatTraceStep(BaseModel):
+    tool: str
+    summary: str
+    ms: int
+
+
+class ChatOut(BaseModel):
+    reply: str
+    intent: str
+    occasion: str | None = None
+    trace: list[ChatTraceStep] = Field(default_factory=list)
+    outfits: list["RecommendOutfitOut"] = Field(default_factory=list)
+    source: str = "rules"
+    fallback_reason: str | None = None
+
+
+class ReceiptOut(BaseModel):
+    brand: str | None = None
+    price: float | None = None
+    material: str | None = None
+    color_family: str | None = None
+    size: str | None = None
+    confidence: float | None = None
+    source: str = "none"
+    reason: str | None = None
+
+
 class ClassifyIn(BaseModel):
     image_id: int
 
@@ -262,6 +353,19 @@ def parse_season(raw: str | None) -> list[str]:
     return [str(v) for v in value] if isinstance(value, list) else []
 
 
+def parse_care_symbols(raw: str | None) -> list[str]:
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(value, list):
+        return []
+    # 库里就算混进了脏数据，出口也只放行编码表里的值
+    return [code for code in (str(v) for v in value) if code in CARE_SYMBOLS]
+
+
 def image_to_out(image) -> ImageOut:  # noqa: ANN001
     return ImageOut(
         id=image.id,
@@ -297,6 +401,10 @@ def item_to_out(item) -> ItemOut:  # noqa: ANN001
         brand=item.brand,
         price=item.price,
         purchased_at=item.purchased_at,
+        size=item.size,
+        purchase_url=item.purchase_url,
+        care_text=item.care_text,
+        care_symbols=parse_care_symbols(item.care_symbols),
         note=item.note,
         created_at=item.created_at,
         images=images,

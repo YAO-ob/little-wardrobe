@@ -27,6 +27,10 @@ export interface Item {
   brand?: string | null
   price?: number | null
   purchased_at?: string | null
+  size?: string | null
+  purchase_url?: string | null
+  care_text?: string | null
+  care_symbols?: string[]
   note?: string | null
   created_at?: string | null
   images: ItemImage[]
@@ -106,6 +110,22 @@ export interface RecommendResult {
   attempts: number
   fallback_reason: string | null
   cached: boolean
+}
+
+export interface ChatTraceStep {
+  tool: string
+  summary: string
+  ms: number
+}
+
+export interface ChatReply {
+  reply: string
+  intent: 'recommend' | 'reroll' | 'weather' | string
+  occasion: string | null
+  trace: ChatTraceStep[]
+  outfits: RecommendOutfit[]
+  source: string
+  fallback_reason: string | null
 }
 
 export interface OutfitItemBrief {

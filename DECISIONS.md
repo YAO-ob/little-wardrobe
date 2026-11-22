@@ -1084,4 +1084,225 @@ curl -X POST http://127.0.0.1:8000/api/classify -H "Content-Type: application/js
 
 图片 id 64 是库里的一双鞋（`items.id=64`）。
 
+## 37. W7b：录入页接上自动识别（2026-11-22）
+
+### 流程变了
+
+原来：选图 → 本地队列 → Enter 时才上传。
+现在：选图 → **立刻上传**（拿 `image_id`）→ 立刻分类 → 给出建议；Enter 直接复用这个 `image_id`，不再重复上传。
+
+必须保留旧路径：自动识别关掉、或上传失败时，退回「Enter 时才上传」。`Draft.uploadState` 就是干这个的（`idle → uploading → done | failed`）。
+
+### 一次只跑一条
+
+队列第一张才启动流水线，用 `pipelineRef` 记住正在处理哪张，避免同一张被 effect 重复触发；保存/跳过后新的第一张会自动接上（effect 依赖 `drafts`）。
+
+### 用户选择优先
+
+`core/capturePrefill.ts` 的 `mergeSuggestion()`：只填**空**字段，并标 `source='suggestion'`（UI 画虚框 + 「建议」角标）；用户按 1-6 / QWE 走 `chooseCategory/chooseWarmth`，`source='user'`，建议不再显示也不覆盖。
+**Enter 时若用户没选，直接采用建议值**——这是「一次 Enter 就存」的关键。
+
+### 暂存图的回收（三个出口）
+
+- 保存成功：`image_ids` 直接用提前传的 id，不重复上传。
+- 保存失败且图是提前传的：`DELETE /api/images/{id}`。
+- 跳过：同样的 DELETE。
+
+**顺手修了一个真 bug**：`DELETE /api/images/{id}` 原来只删 `path`/`thumb_path` 两张派生图，**tmp 里的原图留着**（`Image` 只记派生路径）。现在按 stem 把 `<stem>.*` 一并清掉。验收 c 实测：`tmp: 0 -> 3 -> 0`。
+
+### 设置项
+
+「录入时自动识别」开关在搭配页的设置弹层里（key 也那儿），存 `localStorage['ew.autoClassify']`，默认开。关掉后选图不上传、不分类，行为和 W7a 之前完全一致。
+
+### 验证
+
+| 项 | 结果 |
+|---|---|
+| 后端 | **174 passed**（173 + 暂存删除全清） |
+| 前端 | **59 passed**（56 + 3） / typecheck 0 / build 0 |
+| a) 无 key | 200 `{source: none, reason: no_key}` |
+| c) 跳过 → 删图 | 上传后 tmp 3 个文件，DELETE 后 0 个 |
+| 产物 | 含「正在识别」「建议」「录入时自动识别」「ew.autoClassify」 |
+| b) 真模型返回 / d–g 交互 | **未执行**：需要你的 key 和浏览器 |
+
+### 补丁：save 与上传流水线的竞态（2026-11-22）
+
+**现象**：选图后立刻按 Enter，同一张图被上传两次，先传完的那张留在 `media/tmp` 成为孤儿。
+
+**原因**：`save()` 只看 `current.imageId === null` 就自己上传，没有考虑「流水线正在上传中」这个中间态——此时 `imageId` 还是 null，但上传已经在路上。
+
+**修法**：
+- 新增 `uploadPromiseRef` 保存**在途上传的 promise**（解析为 image id，失败为 null），流水线发起上传时就写进去，结束清空。
+- `save()` 走 `core/uploadOnce.ts` 的 `resolveImageId()`：已有 id 直接用 → 有在途就 `await` 它 → 都没有才自己传。顺序反过来就会双传。
+- 保存成功后不再调 `DELETE /api/images`（图已归属单品，会 409），改用 `removeHead(false)`；跳过/失败才回收。
+- 加 `consumedRef`：已被 Enter 保存掉的草稿，上传完成后不再花钱调分类。
+
+**为什么没有渲染级测试**：本机的 vitest 渲染 React 会撞上重复 React 副本（hook dispatcher 为 null），`createRoot().render()` 直接抛错（第 17 节记过）。所以把决策逻辑抽成纯函数 `resolveImageId()`，用 3 条单测钉住：「已有 id 不上传」「有在途不上传」「在途失败才自己传」。React 状态时序本身仍需人工验。
+
+**待人工验**：选图后立刻 Enter → `media/tmp` 应只剩 0 个文件，且 Network 里只有 1 个 `POST /api/images`。
+
+## 38. W6b：对话入口（意图 + 工具链）（2026-11-22）
+
+### 先抽 service
+
+`routers/recommend.py` 的主体搬到 `recommend_service.build_recommendation()`，路由变成薄壳（解析参数 → 调 service → 设 `X-RateLimit-Remaining`）。**174 条既有测试一条没改，只改了 import**，这是这次重构唯一可信的验收标准。
+
+新增参数 `exclude_ids`（在 `load_wardrobe` 里剔除），供「换一套」用；缓存 key 里的 `wardrobe_hash` 用过滤后的行，所以排除后不会误命中原结果。
+
+### 意图解析
+
+- 关键词先跑，顺序是 **weather → reroll → recommend**（「今天下雨穿什么」应算天气而不是推荐）。
+- 场合词表覆盖四类；命中的词同时作为 `note` 进回复文案（「适合**约会**的搭配」）。
+- 规则没解析出场合**且带了 key** 才问模型；模型的 `intent` / `occasion` 任一越界就整条丢弃、保留规则结果。任何异常都吞掉。
+
+### 工具链
+
+`TOOLS` 注册表 + `CHAINS` 按意图组装，每步返回 `(summary, payload)` 并记 `{tool, summary, ms}`：
+
+| 意图 | 链路 |
+|---|---|
+| recommend | get_weather → search_wardrobe → build_outfits → validate |
+| reroll | 同上（`exclude_ids` 同时作用于工具与最终结果） |
+| weather | 只跑 get_weather |
+
+**取舍**：工具链负责「可展示的执行证据」，最终 outfits 仍由 `build_recommendation()` 产出——否则模型、缓存、限流、指标要写第二遍。代价是多一次 DB 查询和一次规则组套（毫秒级，天气命中缓存）。
+
+### 接口
+
+`POST /api/chat`：`message` 空（strip 后）或 >200 字 → 422；`reply` 用模板，不额外调模型；天气意图返回空 outfits；天气上游失败仍按原语义 502（不吞成 200）。
+
+### 验证
+
+| 项 | 结果 |
+|---|---|
+| 后端 | **182 passed**（174 + 8） |
+| b) 真实 `{"message":"我晚点要约会"}` | 200，reply「正在衣柜里为你挑适合约会的搭配」，trace 4 步，outfits 3 套 |
+| c) `{"message":"今天天气怎么样"}` | 200，trace 1 步，outfits 0，reply 含实时温度与体感 |
+| d) 不带 key | 200，`source=rules` |
+
+### 观察：上游挂了时每个请求要 11 秒（已在 W6b-补 修掉）
+
+验证时 Open-Meteo 正好连不上（TLS 超时，重试一次），每次请求都先撞 11 秒再回落到 DB 快照（`cache=db_stale`）。功能是对的，但体验很差——**每次都要重试上游**。
+
+**修法（W6b-补）**：模块级 `_cooldown_until`（monotonic）。上游失败（超时/连接错误/5xx）后冷却 `EW_WEATHER_COOLDOWN_SECONDS`（默认 60 秒）；冷却期内**有兜底就直接返回 stale，不再打上游**。关键细节：**没有兜底数据时不进冷却**——否则首次请求会永远 502，用户永远等不到一次成功。
+
+实测（上游指到一个只接连接、不响应的黑洞端口）：
+
+```
+request 1: 200 10589ms  stale=True   ← 两次 5s 超时
+request 2: 200     3ms  stale=True   ← cooldown=1，不打上游
+request 3: 200     2ms  stale=True
+```
+
+日志：`weather city=… cache=db_stale cooldown=1 elapsed_ms=0`。
+
+冷却期内上游恢复了也不会提前重试——60 秒后自然恢复；成功一次即 `_cooldown_until = 0`。
+
+## 39. W6c：对话页「问问」（2026-11-22）
+
+### 卡片只留一份
+
+把搭配卡片抽成 `ui/components/OutfitCard.tsx`（`outfit` + 可选 `onSave` / `saved` / `saving` / `onReroll` / `rerolling`）。搭配页传 `onSave`，对话页不传——**同一个组件，两种用法，不会长出第二套卡片样式**。
+
+### 为什么这时才引入 zustand
+
+之前一直没引入状态库，理由是「跨页共享状态为零」：每个页面自己 `useQuery`，tab 切走就卸载、切回来重新拉。现在对话历史必须跨 tab 存在（否则切去看图库再回来，聊天记录没了），这就是第一个真正的跨组件状态。用 zustand 而不是 Context：更新只重渲染订阅者，且不需要包 Provider。**刷新即清空**，不做持久化——聊天记录不值得为它上 localStorage 迁移逻辑。
+
+### 对话页
+
+- 消息：用户右侧深色气泡，agent 左侧浅色；失败时红底气泡 + 「重试」。
+- agent 消息带 `trace` 时渲染 `<details>` 折叠条「执行了 N 步」，展开是 `工具 · 摘要 · 耗时`。
+- 带 `outfits` 时渲染 `OutfitCard` 列表 + 一条「换一套」，`exclude_ids` 取当前第一套的 item ids。
+- 输入区 fixed 在 tab 栏正上方（`bottom-[calc(3.5rem+env(safe-area-inset-bottom))]`），Enter 即发；发送中禁用并显示「正在挑…」。
+- 空状态给三个示例问题。
+- 有 key 走 `mode=llm`，没 key 走 `mode=rules`（服务端本来就会降级，这是双保险）。
+
+### 底栏四个 tab
+
+`grid-cols-4`，字号从 11px 降到 10px、图标 18→16px，`whitespace-nowrap` 防止「录入」被断行；375px 下每格约 93px，放得下。
+
+### 验证
+
+| 项 | 结果 |
+|---|---|
+| 前端 | **64 passed**（62 + 2 chatStore） / typecheck 0 / build 0（299KB / gzip 92KB） |
+| 后端 | 187 passed（未回退） |
+| 产物 | 含「问问」「执行了」「换一套」「正在挑」与示例问题 |
+| d–g 真机交互 | **未执行**，需要你点 |
+
+## 40. W8a：尺码 / 购买链接 / 洗护说明 / 洗护符号（2026-11-22）
+
+### 为什么洗护符号要编码而不是自由文本
+
+「30度」「30℃」「温水」三种写法会同时存在于一个用户的衣柜里，之后想按洗护方式筛选（比如「只显示能机洗的」）就没法做。所以只允许 12 个编码，前后端共用同一张表：
+
+```
+wash_30 / wash_40 / hand_wash / no_wash
+bleach_ok / no_bleach
+tumble_low / no_tumble
+iron_low / no_iron
+dry_clean / no_dry_clean
+```
+
+- 后端 `schemas.CARE_SYMBOLS` 是唯一权威；`ItemCreate` / `ItemUpdate` 用 `field_validator` 校验，出现表外值直接 **422**（不让脏数据进库）。
+- `ItemOut` 出口也过滤一遍：就算库里被外部工具写脏了，API 也不会把它吐出去。
+- DB 存 JSON 字符串（和 `season` 一样），对外永远是 `string[]`。
+
+### 其它三列
+
+- `size String(16)`、`purchase_url Text`（只限长 ≤ 500，不做格式强校验——用户可能贴的是淘宝短链或带参数的 URL）。
+- `care_text Text` 存自然语言洗护说明，和符号互补：符号能筛选，文字能表达「反面晾干」这种符号覆盖不到的。
+
+### 迁移
+
+`c43a9b2d4cb9_item_size_purchase_care.py`，四列全部可空，用 `batch_alter_table`（SQLite 加列要重建表，batch 模式才安全）。
+
+### 前端
+
+详情弹层加了四个控件：尺码单行、购买链接单行（`http(s)://` 开头时下方给「打开链接」）、洗护符号 12 个可点标签（选中深色，空时显示「未填」）、洗护说明两行文本。`buildItemPatch` 已覆盖这四项——没改不出现、清空发 null。
+
+### 验证
+
+| 项 | 结果 |
+|---|---|
+| 后端 | **192 passed**（187 + 5） |
+| 前端 | **65 passed**（64 + 1） / typecheck 0 / build 0 |
+| 真实库 | `alembic head = c43a9b2d4cb9`，四列都在；PATCH 四项 → 重读一致；`wash_60` → 422；验证后已还原原值 |
+
+## 41. W8b：截图识别 + 洗护符号互斥（2026-11-22）
+
+### 互斥校验（后端 + 前端双保险）
+
+五组互斥：洗涤方式、漂白、烘干、熨烫、干洗。后端 `_validate_care_symbols` 检查同组多选 → **422**，detail 写明冲突的是哪几个编码；前端把同组其他按钮**置灰不可点**（点了也顶掉旧的，`toggleCare` 里先剔除同组再追加），所以正常情况下用户碰不到 422。
+
+### 截图识别
+
+`POST /api/items/extract-receipt`（multipart，字段 `file`）：
+
+- Pillow 压到最长边 768、RGB、JPEG q80 → base64；**不发原图**（截图动辄 2–4MB，白烧 token）。
+- prompt 明确「这是购物 App 截图，只提这五项，看不清给 null，不要猜」。
+- 闭合校验：`confidence` 不是 0–1 数字 → 整条弃答；低于 `EW_CLASSIFY_MIN_CONFIDENCE`（默认 0.6）→ 全部 null + `low_confidence`；`price` 非数字或 <0 → 只丢 price，其它保留；文本 trim 并截到 32 字。
+- 无 key / 超时 / 非 JSON / 图坏了 / 太大 → **200 + source=none + reason**，绝不 500。
+- 不落库、不绑定单品：这是建议值，用户确认后走普通 PATCH。
+
+### 前端预填
+
+`core/receiptMerge.ts` 的 `mergeReceipt(form, receipt)`：**只填当前为空的字段**，返回 `filled` 列表；被填的字段打「识别」小标记，用户一改标记就消失（`update()` 里清 `recognized`）。没 key 时按钮仍可点（会上传），结果位置显示「没配置 API key，暂时无法识别」；再下面一行小字「截图会发送给你配置的模型服务商」。
+
+### 验证（真实 HTTP，模型侧是本地假上游）
+
+```
+d) conflicting care symbols: 422 | 互斥 in detail: True
+   one per group: 200 ['wash_40', 'no_bleach', 'no_tumble']
+c) no key: 200 {source: none, reason: no_key} | upstream calls: 0
+a) with key: 200 {brand: 优衣库, price: 199.0, material: 棉, color_family: 藏青, size: M, confidence: 0.88}
+   image prefix: data:image/jpeg;base64,/9j/4AA | has text part: True
+```
+
+| 项 | 结果 |
+|---|---|
+| 后端 | **203 passed**（192 + 11） |
+| 前端 | **68 passed**（65 + 3） / typecheck 0 / build 0 |
+| 真模型 + 真实截图 | **未执行**：没有 key，也不该用用户的 |
+
 

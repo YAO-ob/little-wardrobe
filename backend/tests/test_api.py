@@ -173,6 +173,24 @@ def test_patch_accepts_all_editable_fields(client):
         assert body[key] == value, key
 
 
+def test_delete_staged_image_removes_all_files(client):
+    from app.config import get_settings
+
+    settings = get_settings()
+    settings.ensure_dirs()
+    before = len(list(settings.tmp_dir.iterdir()))
+
+    res = client.post("/api/images", files={"file": ("x.jpg", _jpeg(), "image/jpeg")})
+    assert res.status_code == 201
+    image_id = res.json()["id"]
+    assert len(list(settings.tmp_dir.iterdir())) == before + 3  # 原图 + 1024 + 256
+
+    assert client.delete(f"/api/images/{image_id}").status_code == 204
+
+    # 原图也要一并清掉，否则「跳过」会留孤儿
+    assert len(list(settings.tmp_dir.iterdir())) == before
+
+
 def test_patch_and_delete(client):
     item = client.post("/api/items", json={"category": "dress"}).json()
 

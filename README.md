@@ -135,6 +135,8 @@ python scripts/seed_30.py     # 生成 30 件演示单品（色块图，用于�
 | `EW_LLM_CACHE_TTL` | `1800` | 推荐结果缓存秒数 |
 | `EW_LLM_RATE_LIMIT_PER_MIN` | `10` | 每个客户端每分钟可调模型的次数 |
 | `EW_WEATHER_URL` | `https://api.open-meteo.com` | 天气上游地址；指到不可达地址可验证降级 |
+| `EW_WEATHER_COOLDOWN_SECONDS` | `60` | 天气上游失败后多久不再重试（期间用快照兜底） |
+| `EW_CLASSIFY_MIN_CONFIDENCE` | `0.6` | 录入预填的置信度阈值，低于它就不给建议 |
 
 **都不设置也能跑，只是没有 AI 推荐。**
 

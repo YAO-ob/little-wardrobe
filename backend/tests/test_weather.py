@@ -1,4 +1,4 @@
-"""天气接口测试：全程 monkeypatch httpx，不打真实网络。"""
+﻿"""天气接口测试：全程 monkeypatch httpx，不打真实网络。"""
 
 from __future__ import annotations
 
@@ -90,6 +90,7 @@ class FakeClient:
 @pytest.fixture(autouse=True)
 def fake_http(monkeypatch):
     weather.clear_cache()
+    weather.clear_cooldown()
     FakeClient.calls = 0
     FakeClient.response = FakeResponse(UPSTREAM_OK)
     FakeClient.error = None
@@ -103,6 +104,7 @@ def fake_http(monkeypatch):
         db.commit()
     yield FakeClient
     weather.clear_cache()
+    weather.clear_cooldown()
 
 
 def test_weather_fields_and_types(client):
@@ -401,6 +403,7 @@ def test_recommend_endpoint_shape(client, fake_http):
 def test_recommend_endpoint_propagates_weather_errors(client, fake_http):
     fake_http.error = httpx.ConnectError("boom")
     weather.clear_cache()
+    weather.clear_cooldown()
 
     res = client.get("/api/recommend", params={"city": "杭州"})
     assert res.status_code == 502
