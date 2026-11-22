@@ -20,7 +20,7 @@ export default function App() {
   return (
     <div className="mx-auto flex min-h-full max-w-xl flex-col">
       <header className="sticky top-0 z-10 border-b border-black/5 bg-paper/90 px-4 py-3 backdrop-blur">
-        <h1 className="text-base font-semibold tracking-tight">电子衣柜</h1>
+        <h1 className="text-base font-semibold tracking-tight">小柜子</h1>
       </header>
 
       {/* pb-24 给底部标签栏留位，最后一张卡片不会被遮住 */}

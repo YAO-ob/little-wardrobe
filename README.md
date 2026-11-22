@@ -1,4 +1,4 @@
-# 电子衣柜
+# 小柜子
 
 [![CI](https://img.shields.io/github/actions/workflow/status/YAO-ob/little-wardrobe/ci.yml?branch=master&label=CI)](https://github.com/YAO-ob/little-wardrobe/actions/workflows/ci.yml)
 
@@ -191,7 +191,7 @@ python scripts/seed_30.py     # 生成 30 件演示单品（色块图，用于�
 ## 目录结构
 
 ```
-电子衣柜/
+小柜子/
 ├── backend/
 │   ├── alembic/          # 迁移脚本（baseline → outfits → llm_metrics）
 │   ├── app/routers/      # items / images / outfits / recommend / weather / metrics / cities

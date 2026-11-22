@@ -1,4 +1,4 @@
-"""电子衣柜后端：应用配置。"""
+"""小柜子后端：应用配置。"""
 
 import shutil
 from functools import lru_cache
@@ -13,7 +13,7 @@ ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_prefix="EW_", extra="ignore")
 
-    app_name: str = "电子衣柜"
+    app_name: str = "小柜子"
     data_dir: Path = ROOT_DIR / "data"
     media_dir: Path = ROOT_DIR / "media"
     database_url: str = ""  # 留空则用 sqlite:///data/wardrobe.db
