@@ -32,6 +32,8 @@ export interface Item {
   care_text?: string | null
   care_symbols?: string[]
   note?: string | null
+  /** 这件衣服是什么（「米白亚麻长袖衬衫」）；与 note（私人备注）不同。纯文字录入时非空。 */
+  description?: string | null
   created_at?: string | null
   images: ItemImage[]
   image?: ItemImage | null
@@ -58,6 +60,7 @@ export interface NewItem {
   price?: number | null
   purchased_at?: string | null
   note?: string | null
+  description?: string | null
   image_ids?: number[]
 }
 

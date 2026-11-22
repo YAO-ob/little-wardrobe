@@ -57,7 +57,9 @@ export function createItem(payload: {
   warmth?: Warmth | null
   occasion?: Occasion[]
   color_family?: string | null
+  material?: string | null
   name?: string
+  description?: string | null
   image_ids?: number[]
 }): Promise<import('./types').Item> {
   return request('/items', { method: 'POST', body: JSON.stringify(payload) })
@@ -80,6 +82,26 @@ export interface ClassifyResult {
   confidence: number | null
   source: 'llm' | 'none'
   reason: string | null
+}
+
+export interface ExtractTextResult {
+  category: string | null
+  warmth: number | null
+  color_family: string | null
+  occasion: Occasion[]
+  material: string | null
+  confidence: number | null
+  source: 'llm' | 'none'
+  reason: string | null
+}
+
+/** 纯文字录入：从一句话抽品类/厚薄/颜色/场合/材质（建议值，不落库）。 */
+export function extractText(text: string, llmKey?: string): Promise<ExtractTextResult> {
+  return request<ExtractTextResult>('/items/extract-text', {
+    method: 'POST',
+    body: JSON.stringify({ text }),
+    headers: llmKey ? { 'X-LLM-Key': llmKey } : undefined,
+  })
 }
 
 export interface ReceiptResult {

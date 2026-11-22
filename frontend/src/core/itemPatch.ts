@@ -15,6 +15,7 @@ export interface ItemFormValues {
   season: string[]
   price: string
   note: string
+  description: string
   size: string
   purchase_url: string
   care_text: string
@@ -81,6 +82,7 @@ export function buildItemPatch(form: ItemFormValues, initial: Item): Record<stri
     ['brand', 'brand'],
     ['material', 'material'],
     ['note', 'note'],
+    ['description', 'description'],
     ['size', 'size'],
     ['purchase_url', 'purchase_url'],
     ['care_text', 'care_text'],

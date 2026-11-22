@@ -15,6 +15,7 @@ import {
 import type { Item } from '../../core/types'
 import { getLlmKey } from '../../adapters/llmKey'
 import { toast } from '../../adapters/toast'
+import ItemPlaceholder from './ItemPlaceholder'
 
 const LAYERS = [
   { value: '', label: '不填' },
@@ -43,6 +44,7 @@ function initialForm(item: Item): ItemFormValues {
     season: item.season ?? [],
     price: item.price == null ? '' : String(item.price),
     note: item.note ?? '',
+    description: item.description ?? '',
     size: item.size ?? '',
     purchase_url: item.purchase_url ?? '',
     care_text: item.care_text ?? '',
@@ -218,11 +220,17 @@ export default function ItemDetailModal({ item, onClose }: { item: Item; onClose
           </button>
         </div>
 
-        {item.image?.url && (
+        {item.image?.url ? (
           <img
             src={item.image.url}
             alt={item.name}
             className="mb-3 aspect-square w-full rounded-xl bg-black/5 object-cover"
+          />
+        ) : (
+          <ItemPlaceholder
+            category={item.category}
+            colorFamily={item.color_family}
+            className="mb-3 rounded-xl"
           />
         )}
 
@@ -427,6 +435,18 @@ export default function ItemDetailModal({ item, onClose }: { item: Item; onClose
               </div>
             </div>
           )}
+
+          <label className="col-span-2 space-y-1">
+            <span className="text-[11px] text-black/50">描述（这件衣服是什么）</span>
+            <textarea
+              value={form.description}
+              onChange={(event) => update('description', event.target.value)}
+              rows={2}
+              maxLength={300}
+              placeholder="比如：米白色亚麻长袖衬衫"
+              className={`${fieldClass} resize-none`}
+            />
+          </label>
 
           <label className="col-span-2 space-y-1">
             <span className="text-[11px] text-black/50">备注</span>

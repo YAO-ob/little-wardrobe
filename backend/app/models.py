@@ -46,6 +46,9 @@ class Item(Base):
     care_text: Mapped[str | None] = mapped_column(Text)
     care_symbols: Mapped[str | None] = mapped_column(Text)  # JSON 数组字符串，编码表见 schemas
     note: Mapped[str | None] = mapped_column(Text)
+    # 这件衣服是什么（「米白亚麻长袖衬衫」）；与 note（私人备注，如「女朋友送的」）不同。
+    # 纯文字录入时写用户原文，拍照/相册录入保持 null。
+    description: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[str] = mapped_column(String(32), default=utcnow)
     updated_at: Mapped[str] = mapped_column(String(32), default=utcnow, onupdate=utcnow)
     deleted_at: Mapped[str | None] = mapped_column(String(32))

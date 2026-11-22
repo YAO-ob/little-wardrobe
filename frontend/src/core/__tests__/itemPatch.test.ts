@@ -33,6 +33,7 @@ function form(overrides: Partial<ItemFormValues> = {}): ItemFormValues {
     season: ['spring'],
     price: '100',
     note: '',
+    description: '',
     size: '',
     purchase_url: '',
     care_text: '',

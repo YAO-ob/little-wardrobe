@@ -101,7 +101,11 @@ def _encode(path) -> tuple[str, str]:  # noqa: ANN001
     return base64.b64encode(buffer.getvalue()).decode("ascii"), "image/jpeg"
 
 
-def _validate(data: dict) -> ClassifyOut:
+def _normalize_fields(data: dict) -> dict:
+    """逐字段容错 + 置信度阈值。classify 与 extract-text 共用这一套，避免两套逻辑漂移。
+
+    返回归一化字段字典；置信度 < 阈值或非法时全部置 null（source=none）。
+    """
     raw_confidence = data.get("confidence")
 
     if (
@@ -109,11 +113,27 @@ def _validate(data: dict) -> ClassifyOut:
         or not isinstance(raw_confidence, (int, float))
         or not 0.0 <= float(raw_confidence) <= 1.0
     ):
-        return _result(reason="invalid_confidence")
+        return {
+            "category": None,
+            "warmth": None,
+            "color_family": None,
+            "occasion": [],
+            "confidence": None,
+            "source": "none",
+            "reason": "invalid_confidence",
+        }
 
     confidence = float(raw_confidence)
     if confidence < min_confidence():
-        return _result(confidence=confidence, reason="low_confidence")
+        return {
+            "category": None,
+            "warmth": None,
+            "color_family": None,
+            "occasion": [],
+            "confidence": confidence,
+            "source": "none",
+            "reason": "low_confidence",
+        }
 
     # 逐字段容错：颜色判错不该连累品类，品类判错也不该连累颜色
     category = data.get("category")
@@ -139,21 +159,29 @@ def _validate(data: dict) -> ClassifyOut:
         occasion = []
 
     if category is None and warmth is None and color is None:
-        return _result(
-            occasion=occasion,
-            confidence=confidence,
-            reason="invalid_label" if invalid else "no_fields",
-        )
+        return {
+            "category": None,
+            "warmth": None,
+            "color_family": None,
+            "occasion": occasion,
+            "confidence": confidence,
+            "source": "none",
+            "reason": "invalid_label" if invalid else "no_fields",
+        }
 
-    return _result(
-        category=category,
-        warmth=warmth,
-        color_family=color,
-        occasion=occasion,
-        confidence=confidence,
-        source="llm",
-        reason="invalid_label" if invalid else None,
-    )
+    return {
+        "category": category,
+        "warmth": warmth,
+        "color_family": color,
+        "occasion": occasion,
+        "confidence": confidence,
+        "source": "llm",
+        "reason": "invalid_label" if invalid else None,
+    }
+
+
+def _validate(data: dict) -> ClassifyOut:
+    return ClassifyOut(**_normalize_fields(data))
 
 
 async def classify_path(path, config) -> ClassifyOut:  # noqa: ANN001

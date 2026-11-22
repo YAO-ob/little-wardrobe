@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChangeEvent, RefObject } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
-import { classifyImage, createItem, deleteImage } from '../../core/api'
+import { classifyImage, createItem, deleteImage, extractText } from '../../core/api'
 import {
   chooseCategory,
   chooseWarmth,
@@ -11,8 +11,10 @@ import {
 } from '../../core/capturePrefill'
 import { appendDrafts, makeDraftId } from '../../core/drafts'
 import { resolveImageId } from '../../core/uploadOnce'
-import { CATEGORIES, WARMTHS } from '../../core/labels'
+import { CATEGORIES, COLOR_LABELS, OCCASION_LABEL, WARMTHS } from '../../core/labels'
 import { isTextEntry, resolveShortcut } from '../../core/shortcuts'
+import { buildTextItemPayload } from '../../core/textEntry'
+import { ENTRY_BOXES } from '../../core/entryOptions'
 import type { Category, Occasion, Warmth } from '../../core/types'
 import { createPreview, releasePreview } from '../../adapters/image'
 import { uploadImageFile } from '../../adapters/upload'
@@ -102,6 +104,83 @@ function CaptureEntry({ cameraRef, albumRef, onPick, compact = false }: CaptureE
     </>
   )
 }
+
+interface EntryBoxesProps {
+  cameraRef: RefObject<HTMLInputElement | null>
+  albumRef: RefObject<HTMLInputElement | null>
+  onPick: (event: ChangeEvent<HTMLInputElement>) => void
+  textActive: boolean
+  onToggleText: () => void
+}
+
+/** 空状态下的三个纵向紧凑入口：现在拍 / 从相册选 / 先描述。 */
+function EntryBoxes({ cameraRef, albumRef, onPick, textActive, onToggleText }: EntryBoxesProps) {
+  const box =
+    'flex h-10 cursor-pointer items-center gap-2 rounded-xl border px-3 text-sm transition'
+  return (
+    <div className="space-y-2">
+      {ENTRY_BOXES.map((b) => {
+        if (b.key === 'camera') {
+          return (
+            <label
+              key={b.key}
+              role="button"
+              aria-label={b.label}
+              className={`${box} border-black/10 bg-white text-black/70`}
+            >
+              <input
+                ref={cameraRef}
+                type="file"
+                accept="image/*"
+                capture="environment"
+                className="sr-only"
+                onChange={onPick}
+              />
+              <span className="text-base">{b.icon}</span>
+              {b.label}
+            </label>
+          )
+        }
+        if (b.key === 'album') {
+          return (
+            <label
+              key={b.key}
+              role="button"
+              aria-label={b.label}
+              className={`${box} border-black/10 bg-white text-black/70`}
+            >
+              <input
+                ref={albumRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="sr-only"
+                onChange={onPick}
+              />
+              <span className="text-base">{b.icon}</span>
+              {b.label}
+            </label>
+          )
+        }
+        return (
+          <button
+            key={b.key}
+            type="button"
+            aria-label={b.label}
+            onClick={onToggleText}
+            className={`${box} justify-start ${
+              textActive ? 'border-black bg-black text-white' : 'border-black/10 bg-white text-black/70'
+            }`}
+          >
+            <span className="text-base">{b.icon}</span>
+            {b.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 export default function CapturePage({ onClose }: { onClose: () => void }) {
   const queryClient = useQueryClient()
   const containerRef = useRef<HTMLDivElement>(null)
@@ -121,12 +200,26 @@ export default function CapturePage({ onClose }: { onClose: () => void }) {
   // 已经被保存掉的草稿 id：上传完成后不再浪费一次识别调用
   const consumedRef = useRef<Set<string>>(new Set())
 
+  // 纯文字录入：与图片草稿流完全隔离的一套 UI 状态（提交时再白名单组装 DTO）
+  const [textMode, setTextMode] = useState(false)
+  const [textValue, setTextValue] = useState('')
+  const [textRecognizing, setTextRecognizing] = useState(false)
+  const [textCategory, setTextCategory] = useState<Category | null>(null)
+  const [textWarmth, setTextWarmth] = useState<Warmth | null>(null)
+  const [textOccasion, setTextOccasion] = useState<Occasion[]>([])
+  const [textColor, setTextColor] = useState<string | null>(null)
+  const [textMaterial, setTextMaterial] = useState<string | null>(null)
+  const [textCatSource, setTextCatSource] = useState<FieldSource | null>(null)
+  const [textWarmthSource, setTextWarmthSource] = useState<FieldSource | null>(null)
+
   const current = drafts[0] ?? null
 
   const addFiles = useCallback((files: File[]) => {
     if (files.length === 0) return
     setDrafts((prev) => appendDrafts(prev, files, newDraft))
     setError(null)
+    // 选了图就走图片流，把文字面板收起
+    setTextMode(false)
   }, [])
 
   const updateById = useCallback((id: string, fn: (draft: Draft) => Draft) => {
@@ -272,6 +365,95 @@ export default function CapturePage({ onClose }: { onClose: () => void }) {
   const pickWarmth = useCallback((value: Warmth) => {
     setDrafts((prev) => (prev.length === 0 ? prev : [chooseWarmth(prev[0], value), ...prev.slice(1)]))
   }, [])
+
+  function pickTextCategory(value: Category) {
+    setTextCategory(value)
+    setTextCatSource('user')
+  }
+
+  function pickTextWarmth(value: Warmth | null) {
+    setTextWarmth(value)
+    if (value) setTextWarmthSource('user')
+  }
+
+  async function recognizeText() {
+    const text = textValue.trim()
+    if (!text) {
+      toast('先写点描述')
+      return
+    }
+    setTextRecognizing(true)
+    setError(null)
+    try {
+      const result = await extractText(text.slice(0, 300), getLlmKey() || undefined)
+      if (result.source !== 'llm') {
+        setError(
+          result.reason === 'no_key'
+            ? '没配置 API key，先手动选品类吧'
+            : '没识别出来，手动选一下品类',
+        )
+        return
+      }
+      // 只在用户没手动改过时采纳模型值，别覆盖用户已选的
+      if (textCatSource !== 'user' && result.category) {
+        setTextCategory(result.category as Category)
+        setTextCatSource('suggestion')
+      }
+      if (textWarmthSource !== 'user' && result.warmth) {
+        setTextWarmth(result.warmth as Warmth)
+        setTextWarmthSource('suggestion')
+      }
+      setTextOccasion(result.occasion ?? [])
+      setTextColor(result.color_family)
+      setTextMaterial(result.material)
+      if (!result.category && !result.warmth && !result.color_family && !result.material) {
+        setError('没识别出来，手动选一下品类')
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '识别失败')
+    } finally {
+      setTextRecognizing(false)
+    }
+  }
+
+  async function saveText() {
+    if (busy) return
+    if (!textCategory) {
+      toast('先选一个品类')
+      return
+    }
+    setBusy(true)
+    setError(null)
+    try {
+      // 白名单组装：只写后端契约里有的字段，UI 派生状态（source 等）不进请求体
+      await createItem(
+        buildTextItemPayload({
+          description: textValue,
+          category: textCategory,
+          warmth: textWarmth,
+          occasion: textOccasion,
+          color_family: textColor,
+          material: textMaterial,
+        }),
+      )
+      await queryClient.invalidateQueries({ queryKey: ['items'] })
+      setSaved((n) => n + 1)
+      // 存完重置表单，方便继续录下一件
+      setTextValue('')
+      setTextCategory(null)
+      setTextWarmth(null)
+      setTextOccasion([])
+      setTextColor(null)
+      setTextMaterial(null)
+      setTextCatSource(null)
+      setTextWarmthSource(null)
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '保存失败')
+    } finally {
+      setBusy(false)
+    }
+  }
 
   // 键盘快捷：1-6 品类，Q/W/E 厚薄，Enter 保存，Backspace 跳过
   useEffect(() => {
@@ -472,10 +654,135 @@ export default function CapturePage({ onClose }: { onClose: () => void }) {
             </>
           ) : (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-2">
-                <CaptureEntry cameraRef={cameraRef} albumRef={albumRef} onPick={onPick} />
-              </div>
-              <p className="text-center text-xs text-black/40">{hint}</p>
+              <EntryBoxes
+                cameraRef={cameraRef}
+                albumRef={albumRef}
+                onPick={onPick}
+                textActive={textMode}
+                onToggleText={() => setTextMode((v) => !v)}
+              />
+              {textMode ? (
+                <div className="space-y-3 rounded-2xl border border-black/10 bg-white p-3">
+                  <textarea
+                    value={textValue}
+                    onChange={(event) => setTextValue(event.target.value)}
+                    maxLength={300}
+                    rows={3}
+                    placeholder="比如：米白色亚麻长袖衬衫，夏天穿，通勤也能穿"
+                    className="w-full resize-none rounded-xl border border-black/10 bg-white px-3 py-2 text-sm outline-none focus:border-black/30"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void recognizeText()}
+                      disabled={textRecognizing || busy}
+                      className="flex-1 rounded-xl bg-black py-2 text-sm text-white disabled:opacity-40"
+                    >
+                      {textRecognizing ? '识别中…' : '识别并预填'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void saveText()}
+                      disabled={busy}
+                      className="flex-1 rounded-xl border border-black/10 bg-white py-2 text-sm text-black/70 disabled:opacity-40"
+                    >
+                      直接保存
+                    </button>
+                  </div>
+                  {error && <p className="text-[11px] text-amber-700">{error}</p>}
+
+                  <div>
+                    <p className="mb-1 text-xs font-medium text-black/50">品类</p>
+                    <div className="grid grid-cols-3 gap-1.5">
+                      {CATEGORIES.map((c) => {
+                        const selected = textCategory === c.value
+                        const suggested = textCatSource === 'suggestion' && textCategory === c.value
+                        return (
+                          <button
+                            key={c.value}
+                            type="button"
+                            onClick={() => pickTextCategory(c.value)}
+                            className={`relative flex flex-col items-center gap-0.5 rounded-xl border py-2 text-xs transition ${
+                              selected
+                                ? 'border-black bg-black text-white'
+                                : suggested
+                                  ? 'border-dashed border-black/40 text-black/60'
+                                  : 'border-black/10 text-black/80'
+                            }`}
+                          >
+                            <span className="text-base">{c.icon}</span>
+                            {c.label}
+                            {suggested && !selected && (
+                              <span className="absolute right-1 top-1 rounded-full bg-black/10 px-1 py-0.5 text-[9px] leading-none text-black/50">
+                                建议
+                              </span>
+                            )}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+
+                  {textCategory && textCategory !== 'accessory' && (
+                    <div>
+                      <p className="mb-1 text-xs font-medium text-black/50">厚薄（可不填）</p>
+                      <div className="grid grid-cols-4 gap-1.5">
+                        {WARMTHS.map((w) => {
+                          const selected = textWarmth === w.value
+                          const suggested = textWarmthSource === 'suggestion' && textWarmth === w.value
+                          return (
+                            <button
+                              key={w.value}
+                              type="button"
+                              onClick={() => pickTextWarmth(w.value)}
+                              className={`relative rounded-xl border py-1.5 text-xs transition ${
+                                selected
+                                  ? 'border-black bg-black text-white'
+                                  : suggested
+                                    ? 'border-dashed border-black/40 text-black/60'
+                                    : 'border-black/10 text-black/80'
+                              }`}
+                            >
+                              {w.label}
+                            </button>
+                          )
+                        })}
+                        <button
+                          type="button"
+                          onClick={() => pickTextWarmth(null)}
+                          className={`rounded-xl border py-1.5 text-xs ${
+                            textWarmth === null
+                              ? 'border-black bg-black text-white'
+                              : 'border-black/10 text-black/80'
+                          }`}
+                        >
+                          不填
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {(textColor || textOccasion.length > 0 || textMaterial) && (
+                    <div className="flex flex-wrap gap-1.5 text-[11px] text-black/50">
+                      {textColor && (
+                        <span className="rounded-full bg-black/5 px-2 py-0.5">
+                          颜色：{COLOR_LABELS[textColor] ?? textColor}
+                        </span>
+                      )}
+                      {textOccasion.length > 0 && (
+                        <span className="rounded-full bg-black/5 px-2 py-0.5">
+                          场合：{textOccasion.map((o) => OCCASION_LABEL[o] ?? o).join('、')}
+                        </span>
+                      )}
+                      {textMaterial && (
+                        <span className="rounded-full bg-black/5 px-2 py-0.5">材质：{textMaterial}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <p className="text-center text-xs text-black/40">{hint}</p>
+              )}
               <div className="rounded-xl bg-black/5 px-3 py-2 text-center text-xs text-black/50">
                 本次已录入 {saved} 件
                 {saved > 0 && (

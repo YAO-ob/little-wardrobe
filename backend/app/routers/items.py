@@ -143,6 +143,7 @@ def create_item(payload: ItemCreate, db: Session = Depends(get_db)) -> ItemOut:
             json.dumps(payload.care_symbols, ensure_ascii=False) if payload.care_symbols else None
         ),
         note=payload.note,
+        description=payload.description[:300] if payload.description else None,
     )
     db.add(item)
     db.flush()
@@ -216,6 +217,9 @@ def update_item(item_id: int, payload: ItemUpdate, db: Session = Depends(get_db)
     if "occasion" in data:
         occasions = data.pop("occasion") or []
         item.occasion = json.dumps(occasions, ensure_ascii=False) if occasions else None
+    if "description" in data:
+        desc = data.pop("description")
+        item.description = desc[:300] if isinstance(desc, str) and desc else None
     for field, value in data.items():
         setattr(item, field, value)
     item.updated_at = utcnow()

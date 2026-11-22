@@ -134,6 +134,8 @@ class ItemCreate(BaseModel):
     care_text: str | None = None
     care_symbols: list[str] = Field(default_factory=list)
     note: str | None = None
+    # 这件衣服是什么；纯文字录入时写用户原文（路由层截断 300 字）
+    description: str | None = None
     # 先传图后建单品：这里给已上传图片的 id
     image_ids: list[int] = Field(default_factory=list)
 
@@ -162,6 +164,7 @@ class ItemUpdate(BaseModel):
     care_text: str | None = None
     care_symbols: list[str] | None = None
     note: str | None = None
+    description: str | None = None
 
     _care = field_validator("care_symbols")(_validate_care_symbols)
     _color = field_validator("color_family")(_validate_color_family)
@@ -191,6 +194,7 @@ class ItemOut(BaseModel):
     care_text: str | None = None
     care_symbols: list[str] = Field(default_factory=list)
     note: str | None = None
+    description: str | None = None
     created_at: str | None = None
     images: list[ImageOut] = Field(default_factory=list)
     image: ImageOut | None = None  # 主图，方便卡片直接用
@@ -343,6 +347,23 @@ class ClassifyOut(BaseModel):
     reason: str | None = None
 
 
+class ExtractTextIn(BaseModel):
+    text: str = ""
+
+
+class ExtractTextOut(BaseModel):
+    """纯文字录入的识别结果：复用 ClassifyOut 的逐字段容错，多一个 material。"""
+
+    category: str | None = None
+    warmth: int | None = None
+    color_family: str | None = None
+    occasion: list[str] = Field(default_factory=list)
+    material: str | None = None
+    confidence: float | None = None
+    source: str = "none"
+    reason: str | None = None
+
+
 class OutfitItemBrief(BaseModel):
     id: int
     category: str | None = None
@@ -476,6 +497,7 @@ def item_to_out(item) -> ItemOut:  # noqa: ANN001
         care_text=item.care_text,
         care_symbols=parse_care_symbols(item.care_symbols),
         note=item.note,
+        description=item.description,
         created_at=item.created_at,
         images=images,
         image=primary,

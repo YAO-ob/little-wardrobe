@@ -3,10 +3,19 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { deleteItem, listItems } from '../../core/api'
 import { isIncomplete } from '../../core/itemFields'
 import { resolveDeleteClick } from '../../core/deleteConfirm'
-import { CATEGORIES, CATEGORY_LABEL, OCCASIONS, OCCASION_LABEL, WARMTH_LABEL } from '../../core/labels'
+import {
+  CATEGORIES,
+  CATEGORY_LABEL,
+  COLOR_LABELS,
+  OCCASIONS,
+  OCCASION_LABEL,
+  WARMTH_LABEL,
+} from '../../core/labels'
 import type { Category, Item, Occasion } from '../../core/types'
+import { cardHeadline } from '../../core/textEntry'
 import { toast } from '../../adapters/toast'
 import ItemDetailModal from '../components/ItemDetailModal'
+import ItemPlaceholder from '../components/ItemPlaceholder'
 
 export default function GalleryPage() {
   const queryClient = useQueryClient()
@@ -252,6 +261,10 @@ export default function GalleryPage() {
           <div className="grid grid-cols-3 gap-2">
             {items.map((item) => {
               const incomplete = isIncomplete(item)
+              const colorLabel = item.color_family
+                ? COLOR_LABELS[item.color_family] ?? item.color_family
+                : ''
+              const warmthLabel = item.warmth ? WARMTH_LABEL[item.warmth] : ''
               return (
                 <figure
                   key={item.id}
@@ -266,9 +279,7 @@ export default function GalleryPage() {
                       className="aspect-square w-full object-cover"
                     />
                   ) : (
-                    <div className="flex aspect-square w-full items-center justify-center bg-black/5 text-2xl">
-                      🧺
-                    </div>
+                    <ItemPlaceholder category={item.category} colorFamily={item.color_family} />
                   )}
                   {incomplete &&
                     (incompleteOnly ? (
@@ -306,13 +317,22 @@ export default function GalleryPage() {
                   </button>
                   <figcaption className="space-y-0.5 px-2 py-1.5">
                     <p className="truncate text-xs font-medium">
-                      {CATEGORY_LABEL[item.category] ?? item.category}
-                      {item.warmth ? ` · ${WARMTH_LABEL[item.warmth]}` : ''}
+                      {cardHeadline(
+                        item.description,
+                        `${CATEGORY_LABEL[item.category] ?? item.category}${
+                          colorLabel ? ` · ${colorLabel}` : ''
+                        }`,
+                      )}
                     </p>
                     <p className="truncate text-[11px] text-black/40">
-                      {item.occasion?.length
-                        ? item.occasion.map((o) => OCCASION_LABEL[o]).join(' · ')
-                        : '未填场合'}
+                      {[
+                        warmthLabel,
+                        item.occasion?.length
+                          ? item.occasion.map((o) => OCCASION_LABEL[o]).join(' · ')
+                          : '未填场合',
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
                     </p>
                   </figcaption>
                 </figure>

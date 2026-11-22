@@ -12,6 +12,7 @@ export type FieldKey =
   | 'price'
   | 'purchase_url'
   | 'note'
+  | 'description'
   | 'material'
   | 'care_text'
   | 'layer'
@@ -29,6 +30,7 @@ const ALWAYS: FieldKey[] = [
   'price',
   'purchase_url',
   'note',
+  'description',
   'material',
   'care_text',
 ]
