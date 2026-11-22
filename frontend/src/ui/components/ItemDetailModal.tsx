@@ -435,6 +435,9 @@ export default function ItemDetailModal({ item, onClose }: { item: Item; onClose
               onChange={(event) => update('note', event.target.value)}
               className={fieldClass}
             />
+            <span className="block text-[11px] leading-4 text-black/35">
+              写点只有你知道的：谁送的、什么时候买的、和谁去过哪——问搭配时能用上
+            </span>
           </label>
 
           {visible.has('size') && (

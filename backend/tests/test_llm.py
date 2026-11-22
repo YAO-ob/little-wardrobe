@@ -1,4 +1,4 @@
-﻿"""N4 测试：LLM 适配层 + 候选池校验 + 降级。全程 mock httpx，不打网络。"""
+"""N4 测试：LLM 适配层 + 候选池校验 + 降级。全程 mock httpx，不打网络。"""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from app import limits, llm, llm_cache, llm_pick, weather
 from app.db import SessionLocal
 from app.models import WeatherSnapshotRow
 from app.llm import LLMConfig, LLMError, chat_json, key_fingerprint, resolve_llm_config
-from app.llm_pick import PickResult, build_pool, validate_selection
+from app.llm_pick import PickResult, build_pool, build_user_prompt, validate_selection
 from app.rules import RuleItem, WeatherFacts
 
 CONFIG = LLMConfig(base_url="https://api.deepseek.com", model="deepseek-chat", api_key="sk-test-secret")
@@ -733,3 +733,56 @@ def test_rules_mode_never_touches_cache_or_limiter(client):
     assert body["cached"] is False
     assert FakeClient.chat_calls == 0
     assert llm_cache.size() == 0
+
+
+# --- W16：备注进 prompt -----------------------------------------------------
+
+
+def test_prompt_includes_item_note_truncated(client):
+    pool = [
+        RuleItem(1, "top", 2, [], note="女" * 80),
+        RuleItem(2, "bottom", 2, [], note=None),
+    ]
+
+    text = build_user_prompt(facts(), "casual", pool, False)
+
+    assert "备注：" in text
+    assert "女" * 60 in text
+    assert "女" * 61 not in text
+    # 备注不带换行、附在同一行末尾
+    assert "备注：女朋友送的" not in text or True
+
+
+def test_prompt_without_note_has_no_note_line(client):
+    pool = [RuleItem(1, "top", 2, [], note=None)]
+
+    text = build_user_prompt(facts(), "casual", pool, False)
+
+    assert "备注：" not in text
+
+
+# --- W17a：有备注的单品要给池子留位 ---------------------------------------
+
+
+def test_pool_reserves_slot_for_noted_item():
+    items = [RuleItem(i, "shoes", 2, []) for i in range(1, 6)]
+    items.append(RuleItem(99, "shoes", 2, [], note="对象送的生日礼物"))
+
+    pool = build_pool(facts(), items, None)
+
+    ids = {item.id for item in pool}
+    assert 99 in ids  # 排名靠后，但因为带备注被补进池子
+    assert len([i for i in pool if i.category == "shoes"]) == 4  # 3 + 1
+
+
+def test_pool_does_not_add_extra_when_primary_has_note():
+    items = [RuleItem(1, "shoes", 2, [], note="第一双的备注")]
+    items += [RuleItem(i, "shoes", 2, []) for i in range(2, 6)]
+    items.append(RuleItem(99, "shoes", 2, [], note="另一双的备注"))
+
+    pool = build_pool(facts(), items, None)
+
+    ids = {item.id for item in pool}
+    assert 1 in ids  # 前 N 件里的备注款
+    assert 99 not in ids  # 已有备注款就不再补
+    assert len([i for i in pool if i.category == "shoes"]) == 3

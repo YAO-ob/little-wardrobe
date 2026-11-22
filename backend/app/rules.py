@@ -69,6 +69,18 @@ class RuleItem:
     # 下面两项：库里存了就优先用，没存才按品类/场合推导
     formality: int | None = None
     layer: str | None = None
+    # 用户备注：只有模型看得懂它（规则路径不用）。截断 60 字、去掉换行
+    note: str | None = None
+
+
+NOTE_LIMIT = 60
+
+
+def clean_note(raw: str | None) -> str | None:
+    if not raw:
+        return None
+    text = " ".join(raw.split())
+    return text[:NOTE_LIMIT] or None
 
 
 @dataclass(frozen=True)

@@ -16,7 +16,7 @@ from . import limits, llm_cache
 from .llm import key_fingerprint, resolve_llm_config
 from .llm_pick import pick_with_llm
 from .models import Item, LlmMetric, utcnow
-from .rules import RuleItem, WeatherFacts, build_outfits, layer_of
+from .rules import RuleItem, WeatherFacts, build_outfits, clean_note, layer_of
 from .schemas import (
     OCCASIONS,
     RecommendItemOut,
@@ -110,6 +110,7 @@ def to_rule_items(rows: list[Item]) -> dict[int, RuleItem]:
             occasion=parse_occasion(row.occasion),
             formality=row.formality,
             layer=row.layer,
+            note=clean_note(row.note),
         )
         for row in rows
     }

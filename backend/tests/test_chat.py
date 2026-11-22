@@ -286,11 +286,11 @@ def test_history_is_trimmed_to_six_and_clipped(client, wardrobe, monkeypatch):
     assert body["intent"] == "chat"
     messages = FakeClient.last_messages or []
     contents = [msg["content"] for msg in messages]
-    # system + 8 条 few-shot + 6 条 history + 本轮 user
-    assert len(messages) == 1 + 8 + 6 + 1
+    # system + 10 条 few-shot + 6 条 history + 本轮 user
+    assert len(messages) == 1 + 10 + 6 + 1
     assert contents[0].startswith("你是用户衣柜里的管家")
-    # history 段（索引 9..14）每条都截断到 200 字以内
-    assert all(len(text) <= 200 for text in contents[9:15])
+    # history 段（索引 11..16）每条都截断到 200 字以内
+    assert all(len(text) <= 200 for text in contents[11:17])
 
 
 # --- W12：组不出套时给事实性建议 -------------------------------------------
@@ -410,3 +410,102 @@ def test_greeting_variants_parse_as_chat(client):
 
     # 带了推荐词就不算纯寒暄
     assert parse_intent_rules("哈喽，今天穿什么").intent == "recommend"
+
+
+# --- W16：备注参与选品 -----------------------------------------------------
+
+
+def test_note_item_can_be_picked_and_mentioned(client, monkeypatch):
+    monkeypatch.setenv("EW_LLM_KEY", "test-key")
+    ids = make_items(
+        client,
+        [("top", None), ("bottom", None), ("shoes", None), ("outer", None)],
+    )
+    top, bottom, shoes, outer = ids
+    # 给外套写一句只有用户知道的备注
+    client.patch(f"/api/items/{outer}", json={"note": "女朋友送的"})
+
+    FakeClient.chat_queue = [
+        {
+            "reply": "外面有点凉，那件你对象送的外套正好披上。",
+            "intent": "recommend",
+            "occasion": "casual",
+            "item_ids": [top, bottom, shoes, outer],
+        }
+    ]
+
+    body = chat(client, "今晚和对象出去吃饭")
+
+    assert body["source"] == "llm"
+    assert body["reply"] == "外面有点凉，那件你对象送的外套正好披上。"
+    picked = {item["id"] for item in body["outfits"][0]["items"]}
+    assert outer in picked
+    # 备注进了 prompt，但没有以结构化字段的形式插在中间
+    prompt = FakeClient.last_messages[-1]["content"]
+    assert "备注：女朋友送的" in prompt
+
+
+def test_without_key_notes_are_ignored(client, monkeypatch):
+    ids = make_items(client, [("top", None), ("bottom", None), ("shoes", None)])
+    client.patch(f"/api/items/{ids[0]}", json={"note": "女朋友送的"})
+
+    body = chat(client, "今晚和对象出去吃饭")
+
+    assert body["outfits"]  # 规则路径照常出结果
+    assert FakeClient.chat_calls == 0
+
+
+# --- W17b：对话里识别地点与温度 -------------------------------------------
+
+
+def test_city_in_message_overrides_default(client, wardrobe):
+    body = chat(client, "我在上海，今天穿什么")
+
+    assert body["outfits"]
+    weather_step = next(step for step in body["trace"] if step["tool"] == "get_weather")
+    assert weather_step["summary"].startswith("上海")
+    assert "上海" in body["reply"]
+
+
+def test_temperature_in_message_skips_upstream(client, wardrobe):
+    body = chat(client, "今天大概 15 到 25 度")
+
+    assert FakeClient.weather_calls == 0  # 不取上游
+    assert body["outfits"]
+    assert "15–25" in body["reply"]
+
+
+def test_far_place_asks_for_temperature_and_shows_no_cards(client, wardrobe):
+    body = chat(client, "我要去澳洲玩，带什么衣服")
+
+    assert body["outfits"] == []
+    assert "取不到" in body["reply"]
+    assert "度" in body["reply"]
+    assert body["fallback_reason"] == "weather_unavailable"
+
+
+def test_metaphor_city_does_not_switch_city(client, wardrobe):
+    body = chat(client, "像北京那样冷")
+    weather_step = next(step for step in body["trace"] if step["tool"] == "get_weather")
+    assert weather_step["summary"].startswith("杭州")
+
+
+def test_single_temperature_makes_cold_outfit(client, wardrobe):
+    body = chat(client, "明天 5 度")
+
+    assert FakeClient.weather_calls == 0
+    assert body["outfits"]
+    first = body["outfits"][0]["items"]
+    assert any(item["category"] == "outer" for item in first)
+
+
+def test_two_digit_temperature_is_not_split(client, wardrobe):
+    """「28 度」不能被拆成 2–8 度。"""
+    body = chat(client, "那边大概 28 度")
+
+    assert "28" in body["reply"]
+    assert "2–8" not in body["reply"]
+    assert body["outfits"]
+    first = body["outfits"][0]["items"]
+    # 28 度不需要外套
+    assert not any(item["category"] == "outer" for item in first)

@@ -15,6 +15,7 @@ from .rules import (
     RuleItem,
     WeatherFacts,
     build_outfits,
+    clean_note,
     filter_usable,
     formality_level,
     formality_of,
@@ -43,6 +44,10 @@ MAX_ITEMS = 6
 SYSTEM_PROMPT = (
     "你是一个穿搭助手。根据天气和场合，从给定的候选单品里挑出一套完整搭配。"
     "只能使用候选列表里出现过的 id，绝对不要编造 id。"
+    "候选里如果有备注与用户这句话语义相关的（谁送的、纪念日、某次旅行的纪念），"
+    "优先选它，即使另一件参数更接近。"
+    "选了之后可以在回复里自然提一句，但只在真正相关时提，同一段对话里不要反复提同一个备注。"
+    "不许编造备注里没有的内容，备注没写的事就当不知道。"
     "只输出 JSON，形如 {\"item_ids\": [1, 2, 3], \"reason\": \"一句中文理由\"}。"
 )
 
@@ -58,7 +63,11 @@ class PickResult:
 
 
 def build_pool(facts: WeatherFacts, items: list[RuleItem], occasion: str | None) -> list[RuleItem]:
-    """和规则同一套排序，只是每类截前几件。"""
+    """和规则同一套排序，每类截前几件；再给「有备注但没进池」的单品留一个位子。
+
+    备注优先这件事只有模型能执行，可备注排在池子外面模型根本看不见，
+    所以每类最多补 1 件（按排名取最靠前的有备注那件）。
+    """
     target_warmth = need_warmth(facts.feels_min)
     target_formality = formality_of(occasion)
     usable = filter_usable(items, occasion)
@@ -72,7 +81,15 @@ def build_pool(facts: WeatherFacts, items: list[RuleItem], occasion: str | None)
             target_warmth,
             target_formality,
         )
-        pool.extend(ranked[:size])
+        primary = ranked[:size]
+        pool.extend(primary)
+
+        # 前 size 件里已经有带备注的，就不额外补
+        if any(item.note for item in primary):
+            continue
+        noted = next((item for item in ranked[size:] if item.note), None)
+        if noted is not None:
+            pool.append(noted)
     return pool
 
 
@@ -127,10 +144,13 @@ def build_user_prompt(
         "候选单品：",
     ]
     for item in pool:
-        lines.append(
+        line = (
             f"- id={item.id} category={item.category} warmth={item.warmth} "
             f"layer={layer_of(item)} formality={formality_level(item)}"
         )
+        if item.note:
+            line += f" 备注：{clean_note(item.note)}"
+        lines.append(line)
     lines.append("")
     lines.append("只能从上面给出的 id 中选，不许发明。输出 JSON。")
     return "\n".join(lines)

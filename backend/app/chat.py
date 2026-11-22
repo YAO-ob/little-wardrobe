@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
@@ -24,12 +25,13 @@ from .rules import (
     RuleItem,
     WeatherFacts,
     build_outfits,
+    clean_note,
     filter_usable,
     need_outer,
     need_warmth,
 )
 from .schemas import ChatIn, ChatOut, ChatTraceStep, RecommendOutfitOut, primary_thumb
-from .weather import WeatherResult, weather_text
+from .weather import WeatherResult, WeatherSnapshot, now_iso, today_in, weather_text
 
 logger = logging.getLogger(__name__)
 
@@ -76,6 +78,17 @@ GREETING_WORDS = (
 )
 # 寒暄里夹了这些词就还是原来的意图（「你好，今天冷吗」确实在问天气）
 INTENT_GUARD_WORDS = WEATHER_WORDS + ("度", "冷", "热", "伞", "穿什么", "穿啥", "搭配", "推荐")
+# 穿着词：命中就强制 recommend，模型不能推翻（否则「上海今天穿什么」会飘成天气）
+CLOTHING_WORDS = (
+    "穿什么",
+    "穿啥",
+    "怎么穿",
+    "搭配",
+    "配一套",
+    "穿哪件",
+    "带什么衣服",
+    "穿点什么",
+)
 REROLL_WORDS = ("换", "再来", "别的", "另一套", "这套不行", "不喜欢", "其他")
 OCCASION_WORDS: dict[str, tuple[str, ...]] = {
     "casual": ("约会", "电影", "吃饭", "逛街", "出去玩", "见朋友"),
@@ -97,6 +110,11 @@ PERSONA = (
     "不要臆测用户的状态或情绪（不要说「累了」「辛苦了」「今天心情不错吧」这类），除非用户自己提到；"
     "不知道就只回应问候本身。"
     "推荐搭配时只能用给你的候选 id，绝不自己发明 id，也不要用文字描述具体搭配（用户看卡片）。"
+    "候选里如果有备注与用户这句话语义相关的（谁送的、纪念日、某次旅行的纪念），"
+    "优先选它，即使另一件参数更接近。"
+    "选了之后可以在回复里自然提一句，例如「那件你对象送的外套正好披上」；"
+    "但只在真正相关时提，同一段对话里不要反复提同一个备注。"
+    "不许编造备注里没有的内容，备注没写的事就当不知道。"
     '只输出 JSON：{"reply": "一句话回应(<=60字)", "intent": "recommend|reroll|weather|chat", '
     '"occasion": "casual|work|sport|formal|null", "item_ids": [int]}'
 )
@@ -119,6 +137,11 @@ FEW_SHOT: list[tuple[str, str]] = [
         '"occasion":null,"item_ids":[]}',
     ),
     (
+        "今晚和对象出去吃饭",
+        '{"reply":"外面有点凉，那件你对象送的外套正好披上。","intent":"recommend",'
+        '"occasion":"casual","item_ids":[12,30,41]}',
+    ),
+    (
         "谢谢",
         '{"reply":"不客气，随时喊我。","intent":"chat",'
         '"occasion":null,"item_ids":[]}',
@@ -129,37 +152,174 @@ HISTORY_LIMIT = 6
 HISTORY_CHAR_LIMIT = 200
 REPLY_CHAR_LIMIT = 120
 
+# --- 从自然语言里抽「去哪儿」和「多少度」 ---------------------------------
+
+LOCATION_MARKERS = (
+    "在",
+    "去",
+    "到",
+    "待",
+    "这边",
+    "那边",
+    "的天气",
+    "今天",
+    "明天",
+    "后天",
+    "现在",
+    "出差",
+)
+CITY_METAPHOR = ("像", "比", "跟")  # 「像北京那样冷」不是换城市
+FAR_PLACES = (
+    "澳洲",
+    "澳大利亚",
+    "日本",
+    "韩国",
+    "泰国",
+    "新加坡",
+    "马来西亚",
+    "越南",
+    "三亚",
+    "海南",
+    "香港",
+    "澳门",
+    "台湾",
+    "美国",
+    "加拿大",
+    "英国",
+    "法国",
+    "德国",
+    "意大利",
+    "西班牙",
+    "欧洲",
+    "新西兰",
+    "迪拜",
+    "俄罗斯",
+)
+SHORT_MESSAGE = 12
+
+RANGE_RE = re.compile(
+    r"(?<!\d)(\d{1,2})(?!\d)\s*(?:到|至|-|~|—)\s*(?<!\d)(\d{1,2})(?!\d)\s*(?:度|℃)"
+)
+PAIR_RE = re.compile(r"(?<!\d)(\d{1,2})(?!\d)[^\d]{0,8}(?<!\d)(\d{1,2})(?!\d)\s*(?:度|℃)")
+SINGLE_RE = re.compile(r"(?<!\d)(\d{1,2})(?!\d)\s*(?:度|℃)")
+
+
+def _valid_temp(value: int) -> bool:
+    return -30 <= value <= 45
+
+
+def extract_temperature(message: str) -> tuple[float, float] | None:
+    """从「15 到 25 度」「白天 25 晚上 15」「明天 5 度」里取温度范围。"""
+    text = message
+
+    match = RANGE_RE.search(text)
+    if match:
+        low, high = int(match.group(1)), int(match.group(2))
+        if _valid_temp(low) and _valid_temp(high):
+            return (float(min(low, high)), float(max(low, high)))
+
+    match = PAIR_RE.search(text)
+    if match:
+        first, second = int(match.group(1)), int(match.group(2))
+        if _valid_temp(first) and _valid_temp(second):
+            return (float(min(first, second)), float(max(first, second)))
+
+    match = SINGLE_RE.search(text)
+    if match:
+        value = int(match.group(1))
+        if _valid_temp(value):
+            return (float(value), float(value))
+
+    return None
+
+
+def extract_city(message: str) -> str | None:
+    """内置城市名；比喻句（像北京那样冷）不算，短句或带地点词才算。"""
+    from .data.cities import city_names
+
+    text = message.strip()
+    for name in city_names():
+        if name not in text:
+            continue
+        if any(f"{prefix}{name}" in text for prefix in CITY_METAPHOR):
+            continue
+        if len(text) <= SHORT_MESSAGE or any(marker in text for marker in LOCATION_MARKERS):
+            return name
+    return None
+
+
+def extract_far_place(message: str) -> str | None:
+    """8 城之外的地名：识别得到但拿不到天气时要说清楚，而不是拿默认城市硬算。"""
+    text = message.strip()
+    for name in FAR_PLACES:
+        if name not in text:
+            continue
+        if any(f"{prefix}{name}" in text for prefix in CITY_METAPHOR):
+            continue
+        return name
+    return None
+
+
+def temperature_weather(low: float, high: float, city: str) -> WeatherResult:
+    """用户直接给了温度：不取上游，用他的数字构造 facts（体感用温度近似）。"""
+    snapshot = WeatherSnapshot(
+        city=city,
+        date=today_in("Asia/Shanghai"),
+        t_min=low,
+        t_max=high,
+        feels_min=low,
+        feels_max=high,
+        precip_prob=0.0,
+        wind=0.0,
+        uv=0.0,
+        weather_code=0,
+    )
+    return WeatherResult(
+        snapshot=snapshot,
+        cached=False,
+        stale=False,
+        observed_at=snapshot.date,
+        fetched_at=now_iso(),
+    )
+
 
 @dataclass
 class ParsedIntent:
     intent: str = "recommend"
     occasion: str | None = None
-    note: str = ""
+    scene: str = ""
+    # 规则层判定够确定时锁定意图，模型只能细化（场合/选品）不能推翻
+    locked: bool = False
 
 
 def parse_intent_rules(message: str) -> ParsedIntent:
     text = message.strip().lower()
 
     occasion: str | None = None
-    note = ""
+    scene = ""
     for value, words in OCCASION_WORDS.items():
         hit = next((word for word in words if word in text), None)
         if hit:
             occasion = value
-            note = hit
+            scene = hit
             break
 
     # 寒暄优先，但句子里夹了天气/场合/推荐词就不是纯寒暄
     if any(word in text for word in GREETING_WORDS) and not any(
         word in text for word in INTENT_GUARD_WORDS
     ):
-        return ParsedIntent(intent="chat", occasion=None, note="")
+        return ParsedIntent(intent="chat", occasion=None, scene="", locked=True)
+
+    # 穿着词最硬：既问了穿什么，就一定要出搭配，不能被天气词带走
+    if any(word in text for word in CLOTHING_WORDS):
+        return ParsedIntent(intent="recommend", occasion=occasion, scene=scene, locked=True)
 
     if any(word in text for word in WEATHER_WORDS):
-        return ParsedIntent(intent="weather", occasion=occasion, note=note)
+        return ParsedIntent(intent="weather", occasion=occasion, scene=scene, locked=True)
     if any(word in text for word in REROLL_WORDS):
-        return ParsedIntent(intent="reroll", occasion=occasion, note=note)
-    return ParsedIntent(intent="recommend", occasion=occasion, note=note)
+        return ParsedIntent(intent="reroll", occasion=occasion, scene=scene, locked=True)
+    # 都没命中：交给模型判，模型可以选 chat / recommend / weather
+    return ParsedIntent(intent="recommend", occasion=occasion, scene=scene, locked=False)
 
 
 @dataclass
@@ -235,9 +395,16 @@ CHAINS: dict[str, tuple[str, ...]] = {
 }
 
 
-def _template_reply(intent: str, occasion: str | None, note: str, ctx: ToolContext) -> str:
+def _template_reply(
+    intent: str, occasion: str | None, scene: str, ctx: ToolContext, scope: str | None = None
+) -> str:
     if intent == "chat":
         return "你好呀，今天想穿点什么？"
+    text = _base_template(intent, occasion, scene, ctx)
+    return f"{text}（{scope}）" if scope else text
+
+
+def _base_template(intent: str, occasion: str | None, scene: str, ctx: ToolContext) -> str:
     if intent == "weather" and ctx.weather is not None:
         snap = ctx.weather.snapshot
         return (
@@ -245,7 +412,7 @@ def _template_reply(intent: str, occasion: str | None, note: str, ctx: ToolConte
             f"{snap.t_min:.1f}–{snap.t_max:.1f}℃，"
             f"体感 {snap.feels_min:.1f}–{snap.feels_max:.1f}℃"
         )
-    scene = note or (OCCASION_LABEL[occasion] if occasion else "")
+    scene = scene or (OCCASION_LABEL[occasion] if occasion else "")
     if intent == "reroll":
         return f"换一套，还是{scene}" if scene else "换一套，再看看"
     if occasion:
@@ -331,9 +498,12 @@ def _user_prompt(message: str, ctx: ToolContext, pool: list[RuleItem], weather_n
         "候选单品（只能从这里选 id）：",
     ]
     for item in pool:
-        lines.append(
+        line = (
             f"- id={item.id} category={item.category} warmth={item.warmth} formality={item.formality}"
         )
+        if item.note:
+            line += f" 备注：{clean_note(item.note)}"
+        lines.append(line)
     if not pool:
         lines.append("（衣橱里暂时没有可用单品）")
     lines.append("")
@@ -382,17 +552,53 @@ async def chat(
     # 「按现有的配一套」：放宽到不限场合再试一次
     relaxed = message in RELAX_PHRASES
     config = resolve_llm_config(x_llm_key)
+
+    # 先抽用户自己说的地点与温度：温度 > 消息里的城市 > 前端传的 city > 默认
+    temperature = extract_temperature(message)
+    city_signal = extract_city(message)
+    far_place = extract_far_place(message)
+
     ctx = ToolContext(
         db=db,
-        city=payload.city,
+        city=city_signal or payload.city,
         occasion=None if relaxed else (payload.occasion or parsed.occasion),
         exclude_ids=list(payload.exclude_ids or []),
     )
+
+    scope_note: str | None = None
+    if temperature is not None:
+        low, high = temperature
+        ctx.weather = temperature_weather(low, high, city_signal or payload.city or "杭州")
+        scope_note = (
+            f"按你说的 {low:.0f} 度算的"
+            if low == high
+            else f"按你说的 {low:.0f}–{high:.0f} 度算的"
+        )
+    elif city_signal:
+        scope_note = f"按{city_signal}的天气看"
+
+    # 8 城之外的地名：不给假数据，问温度（南半球 12 月是夏天，拿北京冬天推羽绒服是硬错误）
+    if far_place and temperature is None:
+        return ChatOut(
+            reply=(
+                f"我只有这 8 个城市的天气，{far_place}取不到。"
+                "你到那边大概几度？告诉我温度我就能配。"
+            ),
+            intent="recommend",
+            occasion=ctx.occasion,
+            trace=[],
+            outfits=[],
+            source="none",
+            fallback_reason="weather_unavailable",
+        )
 
     trace: list[ChatTraceStep] = []
 
     # 有 key 时统一跑完整链路（模型可能把「推荐」改判成「闲聊」，池子先备好）
     chain = CHAINS[parsed.intent] if config is None else CHAINS["recommend"]
+    if temperature is not None:
+        # 用户给了温度就不取上游
+        chain = tuple(name for name in chain if name != "get_weather")
     for name in chain:
         started = time.perf_counter()
         try:
@@ -414,7 +620,7 @@ async def chat(
         # 降级路径：模板回复，行为和之前一致
         if parsed.intent == "weather":
             return ChatOut(
-                reply=_template_reply("weather", ctx.occasion, parsed.note, ctx),
+                reply=_template_reply("weather", ctx.occasion, parsed.scene, ctx, scope_note),
                 intent="weather",
                 occasion=ctx.occasion,
                 trace=trace,
@@ -427,7 +633,7 @@ async def chat(
             reply=(
                 _empty_outfit_reply(ctx)
                 if parsed.intent == "recommend" and not rules_now
-                else _template_reply(parsed.intent, ctx.occasion, parsed.note, ctx)
+                else _template_reply(parsed.intent, ctx.occasion, parsed.scene, ctx, scope_note)
             ),
             intent=parsed.intent,
             occasion=ctx.occasion,
@@ -451,6 +657,8 @@ async def chat(
         if snap
         else "暂时取不到"
     )
+    if scope_note:
+        weather_note = f"{weather_note}（{scope_note}）"
 
     messages: list[dict] = [{"role": "system", "content": PERSONA}]
     for user_text, assistant_text in FEW_SHOT:
@@ -463,6 +671,12 @@ async def chat(
     try:
         data = await _ask_model(config, messages)
     except LLMError as exc:
+        # 只记有没有备注，不记备注内容（私人信息）
+        logger.warning(
+            "chat model failed reason=%s has_note=%s",
+            exc.reason,
+            any(item.note for item in ctx.rule_items),
+        )
         trace.append(
             ChatTraceStep(
                 tool="model",
@@ -474,7 +688,7 @@ async def chat(
             reply=(
                 _empty_outfit_reply(ctx)
                 if parsed.intent == "recommend" and not rules_outfits
-                else _template_reply(parsed.intent, ctx.occasion, parsed.note, ctx)
+                else _template_reply(parsed.intent, ctx.occasion, parsed.scene, ctx, scope_note)
             ),
             intent=parsed.intent,
             occasion=ctx.occasion,
@@ -499,7 +713,7 @@ async def chat(
                 ms=int((time.perf_counter() - model_started) * 1000),
             )
         )
-        text = reply or _template_reply(final_intent, ctx.occasion, parsed.note, ctx)
+        text = reply or _template_reply(final_intent, ctx.occasion, parsed.scene, ctx, scope_note)
         # 推荐意图但组不出套：丢掉模型那句话，用真实件数拼的建议（模型会编、会说空话）
         if final_intent == "recommend" and not outfits:
             text = _empty_outfit_reply(ctx)
@@ -513,14 +727,21 @@ async def chat(
             fallback_reason=reason,
         )
 
-    # 结构越界：整条丢弃，走规则结果（保留不了 reply 也无所谓，它可能对应的就是错意图）
-    if intent not in INTENTS or (occasion is not None and occasion not in OCCASIONS):
+    # 规则层锁定意图时，模型只能细化（场合/选品），不能推翻
+    model_intent = intent if intent in INTENTS else None
+    if occasion is not None and occasion not in OCCASIONS:
+        model_intent = None  # 场合越界视为整条不可信
+
+    final_intent = parsed.intent if parsed.locked else model_intent
+
+    # 规则没锁定、模型也判不出来 → 走规则结果
+    if final_intent is None:
         rules_now = rules_outfits
         return ChatOut(
             reply=(
                 _empty_outfit_reply(ctx)
                 if parsed.intent == "recommend" and not rules_now
-                else _template_reply(parsed.intent, ctx.occasion, parsed.note, ctx)
+                else _template_reply(parsed.intent, ctx.occasion, parsed.scene, ctx, scope_note)
             ),
             intent=parsed.intent,
             occasion=ctx.occasion,
@@ -540,9 +761,9 @@ async def chat(
     if occasion and not relaxed:
         ctx.occasion = occasion
 
-    if intent in ("chat", "weather"):
+    if final_intent in ("chat", "weather"):
         # 这两个意图不该带选品；带了就忽略
-        return finish(final_intent=intent, outfits=[], source="llm", reason=None)
+        return finish(final_intent=final_intent, outfits=[], source="llm", reason=None)
 
     want_outer = need_outer(snap.feels_min) if snap else False
     chosen, problems = validate_selection({"item_ids": raw_ids}, pool, want_outer)
