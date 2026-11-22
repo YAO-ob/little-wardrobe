@@ -112,8 +112,8 @@ PERSONA = (
     "推荐搭配时只能用给你的候选 id，绝不自己发明 id，也不要用文字描述具体搭配（用户看卡片）。"
     "候选里如果有备注与用户这句话语义相关的（谁送的、纪念日、某次旅行的纪念），"
     "优先选它，即使另一件参数更接近。"
-    "选了之后可以在回复里自然提一句，例如「那件你对象送的外套正好披上」；"
-    "但只在真正相关时提，同一段对话里不要反复提同一个备注。"
+    "只在用户的话明确指向备注信息时才提（谁送的、纪念日、某次旅行）；"
+    "泛问（今天穿什么、随便配、有什么推荐）不要提备注，同一段对话里也不要反复提同一个备注。"
     "不许编造备注里没有的内容，备注没写的事就当不知道。"
     '只输出 JSON：{"reply": "一句话回应(<=60字)", "intent": "recommend|reroll|weather|chat", '
     '"occasion": "casual|work|sport|formal|null", "item_ids": [int]}'
@@ -140,6 +140,11 @@ FEW_SHOT: list[tuple[str, str]] = [
         "今晚和对象出去吃饭",
         '{"reply":"外面有点凉，那件你对象送的外套正好披上。","intent":"recommend",'
         '"occasion":"casual","item_ids":[12,30,41]}',
+    ),
+    (
+        "今天穿什么",
+        '{"reply":"看天气穿就行，我给你挑了三套。","intent":"recommend",'
+        '"occasion":null,"item_ids":[12,30,41]}',
     ),
     (
         "谢谢",
@@ -791,11 +796,11 @@ async def chat(
     if chosen is None:
         # 重试仍不合格：用规则结果，但保留模型写的回复
         return finish(
-            final_intent=intent, outfits=rules_outfits, source="rules", reason="invalid_ids"
+            final_intent=final_intent, outfits=rules_outfits, source="rules", reason="invalid_ids"
         )
 
     return finish(
-        final_intent=intent,
+        final_intent=final_intent,
         outfits=_with_model_outfit(chosen, reply, ctx, rules_outfits),
         source="llm",
         reason=None,

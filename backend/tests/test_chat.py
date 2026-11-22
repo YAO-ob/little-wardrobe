@@ -176,7 +176,7 @@ def test_invalid_llm_occasion_is_discarded(client, wardrobe, monkeypatch):
         {"reply": "随便穿", "intent": "recommend", "occasion": "party", "item_ids": []}
     ]
 
-    body = chat(client, "帮我看看穿什么好")
+    body = chat(client, "帮我看看")
 
     assert FakeClient.chat_calls == 1
     assert body["occasion"] is None  # 越界整条丢弃，保留规则结果
@@ -286,11 +286,11 @@ def test_history_is_trimmed_to_six_and_clipped(client, wardrobe, monkeypatch):
     assert body["intent"] == "chat"
     messages = FakeClient.last_messages or []
     contents = [msg["content"] for msg in messages]
-    # system + 10 条 few-shot + 6 条 history + 本轮 user
-    assert len(messages) == 1 + 10 + 6 + 1
+    # system + 12 条 few-shot + 6 条 history + 本轮 user
+    assert len(messages) == 1 + 12 + 6 + 1
     assert contents[0].startswith("你是用户衣柜里的管家")
-    # history 段（索引 11..16）每条都截断到 200 字以内
-    assert all(len(text) <= 200 for text in contents[11:17])
+    # history 段（索引 13..18）每条都截断到 200 字以内
+    assert all(len(text) <= 200 for text in contents[13:19])
 
 
 # --- W12：组不出套时给事实性建议 -------------------------------------------
@@ -509,3 +509,68 @@ def test_two_digit_temperature_is_not_split(client, wardrobe):
     first = body["outfits"][0]["items"]
     # 28 度不需要外套
     assert not any(item["category"] == "outer" for item in first)
+
+
+# --- W17d：意图由规则锁定，模型不能推翻 --------------------------------
+
+
+def test_shanghai_wear_question_is_recommend(client, wardrobe):
+    body = chat(client, "上海今天穿什么")
+
+    assert body["intent"] == "recommend"
+    assert body["outfits"]
+
+
+def test_city_prefix_does_not_change_intent(client, wardrobe):
+    a = chat(client, "我在上海，今天穿什么")
+    b = chat(client, "上海今天穿什么")
+
+    assert a["intent"] == b["intent"] == "recommend"
+    assert a["outfits"] and b["outfits"]
+
+
+def test_beijing_cold_question_is_weather_even_if_model_says_recommend(client, wardrobe, monkeypatch):
+    monkeypatch.setenv("EW_LLM_KEY", "test-key")
+    FakeClient.chat_queue = [
+        {
+            "reply": "挺冷的。",
+            "intent": "recommend",
+            "occasion": None,
+            "item_ids": [wardrobe[0], wardrobe[2], wardrobe[4]],
+        }
+    ]
+
+    body = chat(client, "北京今天冷吗")
+
+    assert body["intent"] == "weather"  # 规则锁定天气，模型说了也不算
+    assert body["outfits"] == []
+
+
+def test_wear_question_locked_even_if_model_says_weather(client, wardrobe, monkeypatch):
+    monkeypatch.setenv("EW_LLM_KEY", "test-key")
+    FakeClient.chat_queue = [
+        {"reply": "今天挺冷的。", "intent": "weather", "occasion": None, "item_ids": []}
+    ]
+
+    body = chat(client, "上海今天穿什么")
+
+    assert body["intent"] == "recommend"  # 规则锁定推荐
+    assert body["outfits"]
+
+
+def test_generic_wear_question_prompt_forbids_note_mention(client, wardrobe, monkeypatch):
+    monkeypatch.setenv("EW_LLM_KEY", "test-key")
+    FakeClient.chat_queue = [
+        {
+            "reply": "穿得舒服就行。",
+            "intent": "recommend",
+            "occasion": None,
+            "item_ids": [wardrobe[0], wardrobe[2], wardrobe[4]],
+        }
+    ]
+
+    body = chat(client, "今天穿什么")
+
+    assert body["intent"] == "recommend"
+    prompt = FakeClient.last_messages[0]["content"]
+    assert "泛问" in prompt  # prompt 里有「泛问不要提备注」的约束
