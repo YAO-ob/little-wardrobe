@@ -240,12 +240,18 @@ class OutfitCreate(BaseModel):
     note: str | None = None
 
 
+class ChatHistoryMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(default="", max_length=1000)
+
+
 class ChatIn(BaseModel):
     message: str = Field(default="", max_length=200)
     city: str | None = None
     occasion: str | None = None
     exclude_ids: list[int] = Field(default_factory=list)
     mode: Literal["rules", "llm"] = "rules"
+    history: list[ChatHistoryMessage] = Field(default_factory=list)
 
 
 class ChatTraceStep(BaseModel):

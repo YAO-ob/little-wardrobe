@@ -101,11 +101,13 @@ export function extractReceipt(file: File, llmKey?: string): Promise<ReceiptResu
   })
 }
 
-export function sendChat(payload: {  message: string
+export function sendChat(payload: {
+  message: string
   city?: string
   excludeIds?: number[]
   mode?: 'rules' | 'llm'
   llmKey?: string
+  history?: { role: 'user' | 'assistant'; content: string }[]
 }): Promise<ChatReply> {
   return request<ChatReply>('/chat', {
     method: 'POST',
@@ -114,12 +116,14 @@ export function sendChat(payload: {  message: string
       city: payload.city,
       exclude_ids: payload.excludeIds ?? [],
       mode: payload.mode ?? 'rules',
+      history: payload.history ?? [],
     }),
     headers: payload.llmKey ? { 'X-LLM-Key': payload.llmKey } : undefined,
   })
 }
 
-export function classifyImage(imageId: number, llmKey?: string): Promise<ClassifyResult> {  return request<ClassifyResult>('/classify', {
+export function classifyImage(imageId: number, llmKey?: string): Promise<ClassifyResult> {
+  return request<ClassifyResult>('/classify', {
     method: 'POST',
     body: JSON.stringify({ image_id: imageId }),
     headers: llmKey ? { 'X-LLM-Key': llmKey } : undefined,

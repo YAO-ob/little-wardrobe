@@ -172,6 +172,20 @@ async def chat_json(config: LLMConfig, system: str, user: str) -> tuple[dict, di
     return await _read_completion(config, payload)
 
 
+async def chat_json_messages(
+    config: LLMConfig, messages: list[dict]
+) -> tuple[dict, dict[str, int | None]]:
+    """多轮消息版本：对话要带 few-shot 与历史，不能只有 system+user 两条。"""
+    payload = {
+        "model": config.model,
+        "messages": messages,
+        "temperature": 0,
+        "max_tokens": config.max_tokens,
+        "response_format": {"type": "json_object"},
+    }
+    return await _read_completion(config, payload)
+
+
 async def chat_json_with_image(
     config: LLMConfig,
     system: str,

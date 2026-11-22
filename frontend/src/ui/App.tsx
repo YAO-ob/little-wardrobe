@@ -28,7 +28,7 @@ export default function App() {
         {tab === 'capture' && <CapturePage onOpenGallery={() => setTab('gallery')} />}
         {tab === 'gallery' && <GalleryPage />}
         {tab === 'outfit' && <OutfitPage />}
-        {tab === 'chat' && <ChatPage />}
+        {tab === 'chat' && <ChatPage onOpenCapture={() => setTab('capture')} />}
       </main>
 
       <nav

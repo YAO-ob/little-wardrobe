@@ -10,25 +10,47 @@ import OutfitCard from '../components/OutfitCard'
 
 const EXAMPLES = ['我晚点要约会', '上班穿什么', '今天天气怎么样']
 
-export default function ChatPage() {
+// 只描述「正在做什么」，不做百分比——假进度条是假信息
+const WAITING_LINES = ['翻衣柜中…', '看看今天冷不冷…', '三件里挑一件…', '再确认下搭配…']
+
+export default function ChatPage({ onOpenCapture }: { onOpenCapture: () => void }) {
   const messages = useChatStore((state) => state.messages)
   const append = useChatStore((state) => state.append)
   const [input, setInput] = useState('')
   const [sending, setSending] = useState(false)
+  const [waitIndex, setWaitIndex] = useState(0)
+  const [modelWaiting, setModelWaiting] = useState(false)
   const endRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: 'end' })
   }, [messages.length, sending])
 
+  // 只有这次请求真的会调模型时才轮播（无 key 的模板回复太快，闪一下反而碍眼）
+  useEffect(() => {
+    if (!sending || !modelWaiting) return
+    const timer = window.setInterval(() => {
+      setWaitIndex((index) => (index + 1) % WAITING_LINES.length)
+    }, 800)
+    return () => window.clearInterval(timer)
+  }, [sending, modelWaiting])
+
   async function ask(text: string, options: { excludeIds?: number[]; echo?: boolean } = {}) {
     const trimmed = text.trim()
     if (!trimmed || sending) return
+
+    // 只带最近 6 条，且不含这一条（它在下面才 append）
+    const history = messages.slice(-6).map((message) => ({
+      role: message.role === 'user' ? ('user' as const) : ('assistant' as const),
+      content: message.text,
+    }))
 
     if (options.echo !== false) {
       append({ id: makeDraftId(), role: 'user', text: trimmed })
     }
     setSending(true)
+    setWaitIndex(0)
+    setModelWaiting(Boolean(getLlmKey()))
     try {
       const key = getLlmKey()
       const reply = await sendChat({
@@ -37,6 +59,7 @@ export default function ChatPage() {
         excludeIds: options.excludeIds,
         mode: key ? 'llm' : 'rules',
         llmKey: key || undefined,
+        history,
       })
       append({
         id: makeDraftId(),
@@ -134,6 +157,28 @@ export default function ChatPage() {
                       </details>
                     )}
 
+                    {message.intent === 'recommend' &&
+                      (message.outfits?.length ?? 0) === 0 &&
+                      !message.failed && (
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={onOpenCapture}
+                            className="rounded-xl bg-black px-3 py-1.5 text-xs text-white"
+                          >
+                            去录入
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void ask('随便配一套')}
+                            disabled={sending}
+                            className="rounded-xl border border-black/10 bg-white px-3 py-1.5 text-xs text-black/60 disabled:opacity-40"
+                          >
+                            按现有的配一套
+                          </button>
+                        </div>
+                      )}
+
                     {message.outfits && message.outfits.length > 0 && (
                       <div className="space-y-2">
                         {message.outfits.map((outfit, index) => (
@@ -157,7 +202,11 @@ export default function ChatPage() {
             </div>
           ))}
           {sending && (
-            <p className="pl-1 text-[11px] text-black/40">正在挑…</p>
+            <div className="flex justify-start">
+              <div className="inline-block rounded-2xl rounded-bl-sm bg-white px-3 py-2 text-sm text-black/60 shadow-sm">
+                {modelWaiting ? WAITING_LINES[waitIndex] : '正在挑…'}
+              </div>
+            </div>
           )}
           <div ref={endRef} />
         </div>
