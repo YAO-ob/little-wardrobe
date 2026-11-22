@@ -16,19 +16,19 @@
 
 四张图都在仓库里（`docs/screenshots/`）：对话页那张放在页首当 hero，下面三张对应三个主页面。
 
-**录入页** —— 拍完即入队，建议值虚框等你确认
+**录入** —— 三个入口：现在拍 / 从相册选 / 先描述（纯文字）
 
-![录入页：待录入队列 + 建议值虚框](docs/screenshots/record.png)
+![录入：三个纵向入口与「先描述」文本面板](docs/screenshots/record.png)
 
-**衣柜** —— 九宫格 + 品类/场合/信息不全筛选
+**衣柜** —— 九宫格 + 搜索 + 右上筛选入口
 
-![衣柜：按「上衣」筛选后的九宫格](docs/screenshots/gallery.png)
+![衣柜：九宫格、搜索框与右上筛选入口](docs/screenshots/gallery.png)
 
-**搭配页** —— 天气条 + AI 精选 + 三套规则
+**搭配** —— 天气条 + 场合切换 + 规则推荐 + 已保存
 
-![搭配页：天气条、AI 精选徽标与三套搭配](docs/screenshots/outfit.png)
+![搭配：天气条、场合切换、规则推荐与已保存](docs/screenshots/outfit.png)
 
-生成方式：按下方「本地运行」启动后，依次打开四个标签，各截一张 750px 宽的图，按 `record` / `gallery` / `outfit` / `chat` 命名放进 `docs/screenshots/`。
+生成方式：按下方「本地运行」启动后，依次打开四个页面，各截一张手机截图（宽度 400px 以上即可），按 `record` / `gallery` / `outfit` / `chat` 命名放进 `docs/screenshots/`。
 
 `chat.png` 记得**先把「执行了 N 步」展开再截**——那一条工具链（查天气 → 筛衣橱 → 组套 → 校验）是这个项目最有说服力的画面。
 
