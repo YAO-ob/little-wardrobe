@@ -180,8 +180,8 @@ export default function GalleryPage() {
                     aria-label={
                       confirmingId === item.id ? `确认删除${item.name}` : `删除${item.name}`
                     }
-                    className={`card-delete pointer-events-auto absolute right-1 top-1 z-10 flex min-h-7 min-w-12 items-center justify-center rounded-full p-1.5 text-[10px] leading-none text-white transition-colors after:absolute after:-inset-1.5 after:content-[''] disabled:opacity-40 ${
-                      confirmingId === item.id ? 'bg-red-600' : 'bg-black/65'
+                    className={`card-delete pointer-events-auto absolute right-1 top-1 z-10 flex min-h-7 min-w-12 items-center justify-center rounded-full p-1.5 text-[10px] leading-none text-white transition-colors transition-opacity after:absolute after:-inset-1.5 after:content-[''] disabled:opacity-40 ${
+                      confirmingId === item.id ? 'bg-red-600 opacity-100' : 'bg-black/65 opacity-60 hover:opacity-100'
                     }`}
                   >
                     {deletingId === item.id
