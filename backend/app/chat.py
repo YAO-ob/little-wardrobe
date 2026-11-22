@@ -44,12 +44,38 @@ WEATHER_WORDS = (
     "几度",
     "冷不冷",
     "热不热",
+    "冷吗",
+    "热吗",
     "下雨",
     "带伞",
     "温度",
     "冷不",
     "热不",
 )
+# 寒暄优先：说「你好」不该被当成问天气
+GREETING_WORDS = (
+    "你好",
+    "您好",
+    "hi",
+    "hello",
+    "在吗",
+    "早上好",
+    "早啊",
+    "早安",
+    "午安",
+    "晚安",
+    "早",
+    "晚上好",
+    "嗨",
+    "哈喽",
+    "哈啰",
+    "谢谢",
+    "谢了",
+    "好的",
+    "收到",
+)
+# 寒暄里夹了这些词就还是原来的意图（「你好，今天冷吗」确实在问天气）
+INTENT_GUARD_WORDS = WEATHER_WORDS + ("度", "冷", "热", "伞", "穿什么", "穿啥", "搭配", "推荐")
 REROLL_WORDS = ("换", "再来", "别的", "另一套", "这套不行", "不喜欢", "其他")
 OCCASION_WORDS: dict[str, tuple[str, ...]] = {
     "casual": ("约会", "电影", "吃饭", "逛街", "出去玩", "见朋友"),
@@ -62,8 +88,14 @@ OCCASION_LABEL = {"casual": "日常", "work": "通勤", "sport": "运动", "form
 
 PERSONA = (
     "你是用户衣柜里的管家，说话简短、自然、有点幽默，不要客套话和感叹号堆砌。"
-    "你熟悉用户衣橱里有什么，只在被问到穿着时才推荐，一两句话说完，不要列清单。"
+    "你熟悉用户衣橱里有什么，只在被问到穿着时才推荐，一两句话说完，不要列清单，不要用 emoji。"
     "不能编造衣橱里没有的衣服；不确定的事就说不确定。"
+    "不要报具体温度数字（不要说「8 到 16 度」），日常寒暄用「有点凉」「挺暖和」「雾蒙蒙的」这类说法；"
+    "只有用户明确问多少度 / 冷不冷 / 下不下雨时，才给数字。"
+    "寒暄不必每句都带天气：一半的情况只回应问候本身（「在的，需要我看看穿什么吗？」「不客气，随时喊我」），"
+    "不要每句都用同一个天气句式收尾。如果上一轮已经提过天气，这一轮不要再复述同一个天气描述。"
+    "不要臆测用户的状态或情绪（不要说「累了」「辛苦了」「今天心情不错吧」这类），除非用户自己提到；"
+    "不知道就只回应问候本身。"
     "推荐搭配时只能用给你的候选 id，绝不自己发明 id，也不要用文字描述具体搭配（用户看卡片）。"
     '只输出 JSON：{"reply": "一句话回应(<=60字)", "intent": "recommend|reroll|weather|chat", '
     '"occasion": "casual|work|sport|formal|null", "item_ids": [int]}'
@@ -72,13 +104,23 @@ PERSONA = (
 # few-shot 用真实的 user/assistant 轮次，比塞在 system 里更稳
 FEW_SHOT: list[tuple[str, str]] = [
     (
+        "你好",
+        '{"reply":"你好呀，今天雾蒙蒙的有点凉，出门记得加件外套。","intent":"chat",'
+        '"occasion":null,"item_ids":[]}',
+    ),
+    (
         "我想穿休闲点去约会",
         '{"reply":"那就挑套松快的，约会别穿太板正。","intent":"recommend",'
         '"occasion":"casual","item_ids":[3,8,12,15]}',
     ),
     (
-        "你好，今天好累",
-        '{"reply":"累就先别折腾了，随手抓件舒服的就行。","intent":"chat",'
+        "在吗",
+        '{"reply":"在的，需要我看看穿什么吗？","intent":"chat",'
+        '"occasion":null,"item_ids":[]}',
+    ),
+    (
+        "谢谢",
+        '{"reply":"不客气，随时喊我。","intent":"chat",'
         '"occasion":null,"item_ids":[]}',
     ),
 ]
@@ -96,7 +138,7 @@ class ParsedIntent:
 
 
 def parse_intent_rules(message: str) -> ParsedIntent:
-    text = message.strip()
+    text = message.strip().lower()
 
     occasion: str | None = None
     note = ""
@@ -106,6 +148,12 @@ def parse_intent_rules(message: str) -> ParsedIntent:
             occasion = value
             note = hit
             break
+
+    # 寒暄优先，但句子里夹了天气/场合/推荐词就不是纯寒暄
+    if any(word in text for word in GREETING_WORDS) and not any(
+        word in text for word in INTENT_GUARD_WORDS
+    ):
+        return ParsedIntent(intent="chat", occasion=None, note="")
 
     if any(word in text for word in WEATHER_WORDS):
         return ParsedIntent(intent="weather", occasion=occasion, note=note)
@@ -182,12 +230,14 @@ TOOLS: dict[str, Tool] = {
 CHAINS: dict[str, tuple[str, ...]] = {
     "recommend": ("get_weather", "search_wardrobe", "build_outfits", "validate"),
     "reroll": ("get_weather", "search_wardrobe", "build_outfits", "validate"),
-    "chat": ("get_weather", "search_wardrobe", "build_outfits", "validate"),
+    "chat": ("get_weather",),
     "weather": ("get_weather",),
 }
 
 
 def _template_reply(intent: str, occasion: str | None, note: str, ctx: ToolContext) -> str:
+    if intent == "chat":
+        return "你好呀，今天想穿点什么？"
     if intent == "weather" and ctx.weather is not None:
         snap = ctx.weather.snapshot
         return (

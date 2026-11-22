@@ -286,11 +286,11 @@ def test_history_is_trimmed_to_six_and_clipped(client, wardrobe, monkeypatch):
     assert body["intent"] == "chat"
     messages = FakeClient.last_messages or []
     contents = [msg["content"] for msg in messages]
-    # system + 4 条 few-shot + 6 条 history + 本轮 user
-    assert len(messages) == 1 + 4 + 6 + 1
+    # system + 8 条 few-shot + 6 条 history + 本轮 user
+    assert len(messages) == 1 + 8 + 6 + 1
     assert contents[0].startswith("你是用户衣柜里的管家")
-    # history 段（索引 5..10）每条都截断到 200 字以内
-    assert all(len(text) <= 200 for text in contents[5:11])
+    # history 段（索引 9..14）每条都截断到 200 字以内
+    assert all(len(text) <= 200 for text in contents[9:15])
 
 
 # --- W12：组不出套时给事实性建议 -------------------------------------------
@@ -361,3 +361,49 @@ def test_relax_phrase_ignores_occasion(client):
 
     assert body["occasion"] is None
     assert body["outfits"]
+
+
+# --- W13：寒暄不该被当成问天气 ---------------------------------------------
+
+
+def test_greeting_parses_as_chat(client):
+    from app.chat import parse_intent_rules
+
+    assert parse_intent_rules("你好").intent == "chat"
+    assert parse_intent_rules("在吗").intent == "chat"
+    assert parse_intent_rules("谢谢啦").intent == "chat"
+
+
+def test_greeting_with_weather_word_is_still_weather(client):
+    from app.chat import parse_intent_rules
+
+    assert parse_intent_rules("你好，今天冷吗").intent == "weather"
+    assert parse_intent_rules("你好，今天多少度").intent == "weather"
+
+
+def test_greeting_endpoint_does_not_report_numbers(client, wardrobe, monkeypatch):
+    monkeypatch.setenv("EW_LLM_KEY", "test-key")
+    FakeClient.chat_queue = [
+        {
+            "reply": "你好呀，今天雾蒙蒙的有点凉，出门记得加件外套。",
+            "intent": "chat",
+            "occasion": None,
+            "item_ids": [],
+        }
+    ]
+
+    body = chat(client, "你好")
+
+    assert body["intent"] == "chat"
+    assert body["outfits"] == []
+    assert not any(ch.isdigit() for ch in body["reply"])
+
+
+def test_greeting_variants_parse_as_chat(client):
+    from app.chat import parse_intent_rules
+
+    for phrase in ("嗨", "哈喽", "哈啰", "早啊", "早安", "午安", "晚安"):
+        assert parse_intent_rules(phrase).intent == "chat", phrase
+
+    # 带了推荐词就不算纯寒暄
+    assert parse_intent_rules("哈喽，今天穿什么").intent == "recommend"
