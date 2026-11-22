@@ -1,9 +1,6 @@
 # 电子衣柜
 
-<!-- 仓库建好后，把下面这行里的 OWNER/REPO 换成实际地址并取消注释；
-     现在留空/注释掉是为了避免写死一个不存在的仓库名导致徽标 404。
-[![CI](https://img.shields.io/github/actions/workflow/status/OWNER/REPO/ci.yml?branch=main&label=CI)](https://github.com/OWNER/REPO/actions/workflows/ci.yml)
--->
+[![CI](https://img.shields.io/github/actions/workflow/status/YAO-ob/little-wardrobe-/ci.yml?branch=master&label=CI)](https://github.com/YAO-ob/little-wardrobe-/actions/workflows/ci.yml)
 
 记录自己的衣服，按当天天气和场合给出搭配建议的单用户 Web 应用。
 
