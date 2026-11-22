@@ -18,7 +18,7 @@ dist/
 # 本地数据与密钥
 .env
 .env.local
-data/
+/data/
 media/originals/
 media/derived/
 media/tmp/
