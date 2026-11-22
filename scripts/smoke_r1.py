@@ -68,7 +68,7 @@ def main() -> int:
         print("display:", display.status_code, len(display.content), "bytes")
 
         if listing.json()["total"] < 1 or thumb.status_code != 200 or display.status_code != 200:
-            print("FAIL: 图库链路不通")
+            print("FAIL: 衣柜链路不通")
             return 1
 
     print("R1 SMOKE OK")
