@@ -44,7 +44,7 @@ export default function App() {
                 type="button"
                 onClick={() => setTab(item.value)}
                 aria-current={active ? 'page' : undefined}
-                className={`relative flex min-h-14 flex-col items-center justify-center gap-0.5 py-2 text-[10px] transition-colors ${
+                className={`relative flex min-h-14 flex-col items-center justify-center gap-0.5 py-2 text-[11px] transition-colors ${
                   active ? 'font-medium text-black' : 'text-black/45'
                 }`}
               >
