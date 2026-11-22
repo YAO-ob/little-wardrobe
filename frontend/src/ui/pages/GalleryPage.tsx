@@ -14,6 +14,7 @@ export default function GalleryPage() {
   const [occasion, setOccasion] = useState<Occasion | null>(null)
   const [incompleteOnly, setIncompleteOnly] = useState(false)
   const [q, setQ] = useState('')
+  const [filterOpen, setFilterOpen] = useState(false)
   const [deletingId, setDeletingId] = useState<number | null>(null)
   // 处于「确认删除」状态的卡片；null 表示没有
   const [confirmingId, setConfirmingId] = useState<number | null>(null)
@@ -23,6 +24,9 @@ export default function GalleryPage() {
     () => ({ category: categories, occasion: occasion ?? undefined, incomplete: incompleteOnly, q }),
     [categories, occasion, incompleteOnly, q],
   )
+
+  // 面板外筛选按钮上的角标：搜索词单独显示在输入框里，不计入
+  const activeCount = categories.length + (occasion ? 1 : 0) + (incompleteOnly ? 1 : 0)
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['items', filter],
@@ -73,55 +77,157 @@ export default function GalleryPage() {
         if (confirmingId !== null && !target?.closest('.card-delete')) setConfirmingId(null)
       }}
     >
-      <input
-        value={q}
-        onChange={(e) => setQ(e.target.value)}
-        placeholder="搜名字 / 备注"
-        className="w-full rounded-xl border border-black/10 bg-white px-3 py-2 text-sm outline-none focus:border-black/30"
-      />
-
-      <div className="-mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1">
-        {CATEGORIES.map((c) => (
-          <button
-            key={c.value}
-            type="button"
-            onClick={() => toggleCategory(c.value)}
-            className={`shrink-0 rounded-full border px-3 py-1 text-xs transition ${
-              categories.includes(c.value)
-                ? 'border-black bg-black text-white'
-                : 'border-black/10 bg-white text-black/60'
-            }`}
-          >
-            {c.label}
-          </button>
-        ))}
-        <span className="w-px shrink-0 self-stretch bg-black/10" />
-        {OCCASIONS.map((o) => (
-          <button
-            key={o.value}
-            type="button"
-            onClick={() => setOccasion(occasion === o.value ? null : o.value)}
-            className={`shrink-0 rounded-full border px-3 py-1 text-xs transition ${
-              occasion === o.value
-                ? 'border-black bg-black text-white'
-                : 'border-black/10 bg-white text-black/60'
-            }`}
-          >
-            {o.label}
-          </button>
-        ))}
+      <div className="flex gap-2">
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          placeholder="搜名字 / 备注"
+          className="min-w-0 flex-1 rounded-xl border border-black/10 bg-white px-3 py-2 text-sm outline-none focus:border-black/30"
+        />
         <button
           type="button"
-          onClick={() => setIncompleteOnly((v) => !v)}
-          className={`shrink-0 rounded-full border px-3 py-1 text-xs transition ${
-            incompleteOnly
-              ? 'border-amber-500 bg-amber-500 text-white'
+          onClick={() => setFilterOpen(true)}
+          aria-label="筛选"
+          className={`relative shrink-0 rounded-xl border px-3 py-2 text-sm transition ${
+            activeCount > 0
+              ? 'border-black bg-black text-white'
               : 'border-black/10 bg-white text-black/60'
           }`}
         >
-          信息不全
+          筛选
+          {activeCount > 0 && (
+            <span className="ml-1.5 inline-flex min-w-[18px] items-center justify-center rounded-full bg-amber-500 px-1 text-[10px] font-medium leading-[18px] text-white">
+              {activeCount}
+            </span>
+          )}
         </button>
       </div>
+
+      {filterOpen && (
+        <div
+          className="overlay-enter fixed inset-0 z-40 flex items-end justify-center bg-black/50"
+          onClick={() => setFilterOpen(false)}
+        >
+          <div
+            className="sheet-enter max-h-[80vh] w-full max-w-lg overflow-y-auto rounded-t-2xl bg-white p-4"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <p className="text-sm font-medium">筛选</p>
+              <button
+                type="button"
+                onClick={() => setFilterOpen(false)}
+                className="text-xs text-black/40"
+              >
+                关闭
+              </button>
+            </div>
+
+            <section className="mb-4">
+              <div className="mb-1.5 flex items-center justify-between">
+                <p className="text-[11px] text-black/50">种类</p>
+                {categories.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setCategories([])}
+                    className="text-[11px] text-black/40"
+                  >
+                    清除
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {CATEGORIES.map((c) => (
+                  <button
+                    key={c.value}
+                    type="button"
+                    onClick={() => toggleCategory(c.value)}
+                    aria-pressed={categories.includes(c.value)}
+                    className={`rounded-full border px-3 py-1 text-xs transition ${
+                      categories.includes(c.value)
+                        ? 'border-black bg-black text-white'
+                        : 'border-black/10 bg-white text-black/60'
+                    }`}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className="mb-4">
+              <p className="mb-1.5 text-[11px] text-black/50">场景</p>
+              <div className="flex flex-wrap gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setOccasion(null)}
+                  aria-pressed={occasion === null}
+                  className={`rounded-full border px-3 py-1 text-xs transition ${
+                    occasion === null
+                      ? 'border-black bg-black text-white'
+                      : 'border-black/10 bg-white text-black/60'
+                  }`}
+                >
+                  全部
+                </button>
+                {OCCASIONS.map((o) => (
+                  <button
+                    key={o.value}
+                    type="button"
+                    onClick={() => setOccasion(o.value)}
+                    aria-pressed={occasion === o.value}
+                    className={`rounded-full border px-3 py-1 text-xs transition ${
+                      occasion === o.value
+                        ? 'border-black bg-black text-white'
+                        : 'border-black/10 bg-white text-black/60'
+                    }`}
+                  >
+                    {o.label}
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className="mb-4">
+              <p className="mb-1.5 text-[11px] text-black/50">其他</p>
+              <button
+                type="button"
+                onClick={() => setIncompleteOnly((v) => !v)}
+                aria-pressed={incompleteOnly}
+                className={`rounded-full border px-3 py-1 text-xs transition ${
+                  incompleteOnly
+                    ? 'border-amber-500 bg-amber-500 text-white'
+                    : 'border-black/10 bg-white text-black/60'
+                }`}
+              >
+                信息不全
+              </button>
+            </section>
+
+            <div className="mt-5 flex gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setCategories([])
+                  setOccasion(null)
+                  setIncompleteOnly(false)
+                  setFilterOpen(false)
+                }}
+                className="flex-1 rounded-xl border border-black/10 py-2.5 text-sm text-black/60"
+              >
+                重置
+              </button>
+              <button
+                type="button"
+                onClick={() => setFilterOpen(false)}
+                className="flex-1 rounded-xl bg-black py-2.5 text-sm text-white"
+              >
+                完成
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {isLoading && <p className="py-10 text-center text-sm text-black/40">加载中…</p>}
       {error && <p className="py-10 text-center text-sm text-red-500">加载失败</p>}

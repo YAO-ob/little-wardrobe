@@ -33,3 +33,30 @@ body {
     opacity: 1;
   }
 }
+
+/* 筛选底部弹层：遮罩淡入 + 面板从底部滑入。只做进场，退场与现有 modal 一致（即时关闭）。 */
+@keyframes overlay-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes sheet-up {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+.overlay-enter {
+  animation: overlay-in 0.18s ease-out;
+}
+
+.sheet-enter {
+  animation: sheet-up 0.2s ease-out;
+}
