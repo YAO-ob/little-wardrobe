@@ -9,7 +9,7 @@ type Tab = 'capture' | 'gallery' | 'outfit' | 'chat'
 
 const TABS: { value: Tab; label: string; icon: string }[] = [
   { value: 'capture', label: '录入', icon: '📷' },
-  { value: 'gallery', label: '图库', icon: '🧺' },
+  { value: 'gallery', label: '衣柜', icon: '🗄️' },
   { value: 'outfit', label: '搭配', icon: '👕' },
   { value: 'chat', label: '问问', icon: '💬' },
 ]

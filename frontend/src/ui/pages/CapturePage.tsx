@@ -488,7 +488,7 @@ export default function CapturePage({ onOpenGallery }: { onOpenGallery: () => vo
             本次已录入 {saved} 件
             {saved > 0 && (
               <button type="button" onClick={onOpenGallery} className="ml-2 underline">
-                看图库
+                看衣柜
               </button>
             )}
           </div>
