@@ -1,8 +1,12 @@
 /** 单品编辑表单 → PATCH body，以及表单校验。纯函数，便于单测。 */
 
-import type { Item } from './types'
+import type { Category, Item } from './types'
+import { visibleFields, type FieldKey } from './itemFields'
 
 export interface ItemFormValues {
+  category: Category
+  warmth: string
+  occasion: string
   color_family: string
   brand: string
   material: string
@@ -58,6 +62,21 @@ export function validateItemForm(form: ItemFormValues): ItemFormErrors {
 export function buildItemPatch(form: ItemFormValues, initial: Item): Record<string, unknown> {
   const patch: Record<string, unknown> = {}
 
+  // 品类不允许清空（数据库 NOT NULL），只有改了才进 patch
+  if (form.category !== initial.category) {
+    patch.category = form.category
+  }
+
+  const initialWarmth = initial.warmth == null ? '' : String(initial.warmth)
+  if (form.warmth !== initialWarmth) {
+    patch.warmth = form.warmth === '' ? null : Number(form.warmth)
+  }
+
+  const initialOccasion = initial.occasion ?? ''
+  if (form.occasion !== initialOccasion) {
+    patch.occasion = form.occasion === '' ? null : form.occasion
+  }
+
   const textFields: [keyof ItemFormValues, keyof Item][] = [
     ['color_family', 'color_family'],
     ['brand', 'brand'],
@@ -94,6 +113,13 @@ export function buildItemPatch(form: ItemFormValues, initial: Item): Record<stri
   const initialPrice = initial.price == null ? '' : String(initial.price)
   if (form.price !== initialPrice) {
     patch.price = form.price.trim() === '' ? null : Number(form.price)
+  }
+
+  // 被品类隐藏的字段即便「看起来改过」也不提交——切一下品类不该把原值覆盖掉
+  const visible = visibleFields(form.category)
+  for (const key of Object.keys(patch)) {
+    if (key === 'category') continue
+    if (!visible.has(key as FieldKey)) delete patch[key]
   }
 
   return patch

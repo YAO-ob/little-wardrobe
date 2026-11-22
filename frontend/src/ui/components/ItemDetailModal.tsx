@@ -2,9 +2,10 @@ import { useState, useRef } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { deleteItem, extractReceipt, updateItem } from '../../core/api'
 import { buildItemPatch, validateItemForm, type ItemFormValues } from '../../core/itemPatch'
+import { visibleFields } from '../../core/itemFields'
 import { mergeReceipt } from '../../core/receiptMerge'
-import { CATEGORY_LABEL, CARE_EXCLUSIVE_GROUPS, CARE_SYMBOLS, WARMTH_LABEL } from '../../core/labels'
-import type { Category, Item } from '../../core/types'
+import { CATEGORIES, CARE_EXCLUSIVE_GROUPS, CARE_SYMBOLS, OCCASIONS, WARMTHS } from '../../core/labels'
+import type { Item } from '../../core/types'
 import { getLlmKey } from '../../adapters/llmKey'
 import { toast } from '../../adapters/toast'
 
@@ -24,6 +25,9 @@ const SEASONS = [
 
 function initialForm(item: Item): ItemFormValues {
   return {
+    category: item.category,
+    warmth: item.warmth == null ? '' : String(item.warmth),
+    occasion: item.occasion ?? '',
     color_family: item.color_family ?? '',
     brand: item.brand ?? '',
     material: item.material ?? '',
@@ -52,6 +56,8 @@ export default function ItemDetailModal({ item, onClose }: { item: Item; onClose
   const [recognized, setRecognized] = useState<Set<string>>(new Set())
   const [receiptNotice, setReceiptNotice] = useState<string | null>(null)
   const receiptInputRef = useRef<HTMLInputElement>(null)
+  // 切品类立刻重算：隐藏的字段只是不渲染，值仍留在 form 里、也不会进 patch
+  const visible = visibleFields(form.category)
 
   function update<K extends keyof ItemFormValues>(key: K, value: ItemFormValues[K]) {
     setForm((prev) => ({ ...prev, [key]: value }))
@@ -188,13 +194,9 @@ export default function ItemDetailModal({ item, onClose }: { item: Item; onClose
         onClick={(event) => event.stopPropagation()}
       >
         <div className="mb-3 flex items-start justify-between gap-2">
-          <div>
-            <p className="text-sm font-medium">{CATEGORY_LABEL[item.category as Category] ?? item.category}</p>
-            <p className="text-[11px] text-black/40">
-              {item.warmth ? `${WARMTH_LABEL[item.warmth]} · ` : ''}
-              {item.created_at ? item.created_at.slice(0, 10) : ''}
-            </p>
-          </div>
+          <p className="text-[11px] text-black/40">
+            {item.created_at ? item.created_at.slice(0, 10) : ''}
+          </p>
           <button type="button" onClick={onClose} className="text-xs text-black/40">
             关闭
           </button>
@@ -207,6 +209,93 @@ export default function ItemDetailModal({ item, onClose }: { item: Item; onClose
             className="mb-3 aspect-square w-full rounded-xl bg-black/5 object-cover"
           />
         )}
+
+        <section className="mb-3 space-y-2">
+          <div>
+            <p className="mb-1 text-[11px] text-black/50">品类（决定在搭配里的角色）</p>
+            <div className="grid grid-cols-3 gap-1.5">
+              {CATEGORIES.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => update('category', option.value)}
+                  className={`flex flex-col items-center gap-0.5 rounded-xl border py-2 text-xs ${
+                    form.category === option.value
+                      ? 'border-black bg-black text-white'
+                      : 'border-black/10 bg-white text-black/70'
+                  }`}
+                >
+                  <span className="text-base leading-none">{option.icon}</span>
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {visible.has('warmth') && (
+            <div>
+              <p className="mb-1 text-[11px] text-black/50">厚薄（决定温度匹配）</p>
+              <div className="grid grid-cols-4 gap-1.5">
+              {WARMTHS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => update('warmth', String(option.value))}
+                  className={`rounded-xl border py-1.5 text-xs ${
+                    form.warmth === String(option.value)
+                      ? 'border-black bg-black text-white'
+                      : 'border-black/10 bg-white text-black/70'
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => update('warmth', '')}
+                className={`rounded-xl border py-1.5 text-xs ${
+                  form.warmth === ''
+                    ? 'border-black bg-black text-white'
+                    : 'border-black/10 bg-white text-black/70'
+                }`}
+              >
+                不填
+              </button>
+            </div>
+            </div>
+          )}
+
+          <div>
+            <p className="mb-1 text-[11px] text-black/50">场合（决定筛选）</p>
+            <div className="grid grid-cols-5 gap-1.5">
+              {OCCASIONS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => update('occasion', option.value)}
+                  className={`rounded-xl border py-1.5 text-xs ${
+                    form.occasion === option.value
+                      ? 'border-black bg-black text-white'
+                      : 'border-black/10 bg-white text-black/70'
+                  }`}
+                >
+                  {option.label}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={() => update('occasion', '')}
+                className={`rounded-xl border py-1.5 text-xs ${
+                  form.occasion === ''
+                    ? 'border-black bg-black text-white'
+                    : 'border-black/10 bg-white text-black/70'
+                }`}
+              >
+                不填
+              </button>
+            </div>
+          </div>
+        </section>
 
         <div className="mb-3 space-y-1">
           <input
@@ -285,40 +374,44 @@ export default function ItemDetailModal({ item, onClose }: { item: Item; onClose
             )}
           </label>
 
-          <label className="col-span-1 space-y-1">
-            <span className="text-[11px] text-black/50">在搭配里的位置</span>
-            <select
-              value={form.layer}
-              onChange={(event) => update('layer', event.target.value)}
-              className={fieldClass}
-            >
-              {LAYERS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
+          {visible.has('layer') && (
+            <label className="col-span-1 space-y-1">
+              <span className="text-[11px] text-black/50">在搭配里的位置</span>
+              <select
+                value={form.layer}
+                onChange={(event) => update('layer', event.target.value)}
+                className={fieldClass}
+              >
+                {LAYERS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
 
-          <div className="col-span-2 space-y-1">
-            <span className="text-[11px] text-black/50">季节</span>
-            <div className="flex gap-1.5">
-              {SEASONS.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  onClick={() => toggleSeason(option.value)}
-                  className={`rounded-full border px-3 py-1 text-xs ${
-                    form.season.includes(option.value)
-                      ? 'border-black bg-black text-white'
-                      : 'border-black/10 bg-white text-black/60'
-                  }`}
-                >
-                  {option.label}
-                </button>
-              ))}
+          {visible.has('season') && (
+            <div className="col-span-2 space-y-1">
+              <span className="text-[11px] text-black/50">季节</span>
+              <div className="flex gap-1.5">
+                {SEASONS.map((option) => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => toggleSeason(option.value)}
+                    className={`rounded-full border px-3 py-1 text-xs ${
+                      form.season.includes(option.value)
+                        ? 'border-black bg-black text-white'
+                        : 'border-black/10 bg-white text-black/60'
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
           <label className="col-span-2 space-y-1">
             <span className="text-[11px] text-black/50">备注</span>
@@ -329,15 +422,17 @@ export default function ItemDetailModal({ item, onClose }: { item: Item; onClose
             />
           </label>
 
-          <label className="col-span-1 space-y-1">
-            <span className="text-[11px] text-black/50">尺码 {mark('size')}</span>
-            <input
-              value={form.size}
-              onChange={(event) => update('size', event.target.value)}
-              placeholder="M / 42 / One Size"
-              className={fieldClass}
-            />
-          </label>
+          {visible.has('size') && (
+            <label className="col-span-1 space-y-1">
+              <span className="text-[11px] text-black/50">尺码 {mark('size')}</span>
+              <input
+                value={form.size}
+                onChange={(event) => update('size', event.target.value)}
+                placeholder="M / 42 / One Size"
+                className={fieldClass}
+              />
+            </label>
+          )}
 
           <label className="col-span-1 space-y-1">
             <span className="text-[11px] text-black/50">购买链接</span>
@@ -359,39 +454,41 @@ export default function ItemDetailModal({ item, onClose }: { item: Item; onClose
             )}
           </label>
 
-          <div className="col-span-2 space-y-1">
-            <span className="text-[11px] text-black/50">
-              洗护符号
-              {form.care_symbols.length === 0 && <span className="ml-2 text-black/30">未填</span>}
-            </span>
-            <div className="flex flex-wrap gap-1.5">
-              {CARE_SYMBOLS.map((symbol) => {
-                const active = form.care_symbols.includes(symbol.value)
-                const group =
-                  CARE_EXCLUSIVE_GROUPS.find((codes) => codes.includes(symbol.value)) ?? []
-                const blocked =
-                  !active && group.some((code) => form.care_symbols.includes(code))
-                return (
-                  <button
-                    key={symbol.value}
-                    type="button"
-                    onClick={() => toggleCare(symbol.value)}
-                    disabled={blocked}
-                    aria-pressed={active}
-                    className={`rounded-full border px-2.5 py-1 text-[11px] ${
-                      active
-                        ? 'border-black bg-black text-white'
-                        : blocked
-                          ? 'border-black/5 bg-black/5 text-black/25'
-                          : 'border-black/10 bg-white text-black/60'
-                    }`}
-                  >
-                    {symbol.label}
-                  </button>
-                )
-              })}
+          {visible.has('care_symbols') && (
+            <div className="col-span-2 space-y-1">
+              <span className="text-[11px] text-black/50">
+                洗护符号
+                {form.care_symbols.length === 0 && <span className="ml-2 text-black/30">未填</span>}
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {CARE_SYMBOLS.map((symbol) => {
+                  const active = form.care_symbols.includes(symbol.value)
+                  const group =
+                    CARE_EXCLUSIVE_GROUPS.find((codes) => codes.includes(symbol.value)) ?? []
+                  const blocked =
+                    !active && group.some((code) => form.care_symbols.includes(code))
+                  return (
+                    <button
+                      key={symbol.value}
+                      type="button"
+                      onClick={() => toggleCare(symbol.value)}
+                      disabled={blocked}
+                      aria-pressed={active}
+                      className={`rounded-full border px-2.5 py-1 text-[11px] ${
+                        active
+                          ? 'border-black bg-black text-white'
+                          : blocked
+                            ? 'border-black/5 bg-black/5 text-black/25'
+                            : 'border-black/10 bg-white text-black/60'
+                      }`}
+                    >
+                      {symbol.label}
+                    </button>
+                  )
+                })}
+              </div>
             </div>
-          </div>
+          )}
 
           <label className="col-span-2 space-y-1">
             <span className="text-[11px] text-black/50">洗护说明</span>

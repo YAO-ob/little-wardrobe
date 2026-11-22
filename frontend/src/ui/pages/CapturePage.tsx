@@ -282,8 +282,10 @@ export default function CapturePage({ onOpenGallery }: { onOpenGallery: () => vo
       event.preventDefault()
 
       if (action.type === 'category') pickCategory(action.value)
-      else if (action.type === 'warmth') pickWarmth(action.value)
-      else if (action.type === 'save') void save()
+      else if (action.type === 'warmth') {
+        // 配饰没有厚薄概念，Q/W/E 直接忽略
+        if (current.category !== 'accessory') pickWarmth(action.value)
+      } else if (action.type === 'save') void save()
       else dropCurrent()
     }
     window.addEventListener('keydown', onKeyDown)
@@ -396,8 +398,9 @@ export default function CapturePage({ onOpenGallery }: { onOpenGallery: () => vo
             </div>
           </section>
 
-          <section>
-            <p className="mb-2 text-xs font-medium text-black/50">厚薄（Q/W/E）</p>
+          {current.category !== 'accessory' && (
+            <section>
+              <p className="mb-2 text-xs font-medium text-black/50">厚薄（Q/W/E）</p>
             <div className="grid grid-cols-3 gap-2">
               {WARMTHS.map((w) => {
                 const suggested =
@@ -426,7 +429,8 @@ export default function CapturePage({ onOpenGallery }: { onOpenGallery: () => vo
                 )
               })}
             </div>
-          </section>
+            </section>
+          )}
 
           <section>
             <p className="mb-2 text-xs font-medium text-black/50">场合</p>

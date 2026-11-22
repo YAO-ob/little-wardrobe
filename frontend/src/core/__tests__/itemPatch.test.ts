@@ -22,6 +22,9 @@ const baseItem: Item = {
 
 function form(overrides: Partial<ItemFormValues> = {}): ItemFormValues {
   return {
+    category: 'top',
+    warmth: '',
+    occasion: '',
     color_family: '黑',
     brand: '',
     material: '',
@@ -88,6 +91,45 @@ describe('buildItemPatch', () => {
 
     const changed = buildItemPatch(form({ care_symbols: ['no_bleach'] }), withCare)
     expect(changed.care_symbols).toEqual(['no_bleach'])
+  })
+
+  it('只改场合 → patch 里只有 occasion', () => {
+    const item: Item = { ...baseItem, occasion: 'casual' }
+    const patch = buildItemPatch(form({ occasion: 'work' }), item)
+
+    expect(patch).toEqual({ occasion: 'work' })
+  })
+
+  it('场合改成不填 → occasion 是 null', () => {
+    const item: Item = { ...baseItem, occasion: 'casual' }
+    const patch = buildItemPatch(form({ occasion: '' }), item)
+
+    expect(patch).toEqual({ occasion: null })
+  })
+
+  it('品类改成另一个 → patch 带新值；品类没变则不出现', () => {
+    const item: Item = { ...baseItem, category: 'top' }
+    expect(buildItemPatch(form({ category: 'outer' }), item)).toEqual({ category: 'outer' })
+    expect('category' in buildItemPatch(form({ category: 'top' }), item)).toBe(false)
+  })
+
+  it('切到鞋后 layer / care_symbols 不进 patch（隐藏字段不提交）', () => {
+    const item: Item = { ...baseItem, category: 'top', layer: 'inner', care_symbols: ['wash_30'] }
+    const patch = buildItemPatch(
+      form({ category: 'shoes', layer: 'outer', care_symbols: ['no_bleach'] }),
+      item,
+    )
+
+    expect(patch.category).toBe('shoes')
+    expect('layer' in patch).toBe(false)
+    expect('care_symbols' in patch).toBe(false)
+  })
+
+  it('切到配饰后 warmth 不进 patch', () => {
+    const item: Item = { ...baseItem, category: 'top', warmth: 2 }
+    const patch = buildItemPatch(form({ category: 'accessory', warmth: '3' }), item)
+
+    expect(patch).toEqual({ category: 'accessory' })
   })
 })
 

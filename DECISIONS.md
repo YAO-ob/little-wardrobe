@@ -1305,7 +1305,43 @@ a) with key: 200 {brand: 优衣库, price: 199.0, material: 棉, color_family: �
 | 前端 | **68 passed**（65 + 3） / typecheck 0 / build 0 |
 | 真模型 + 真实截图 | **未执行**：没有 key，也不该用用户的 |
 
-## 42. 交付阶段的两次「本地绿、CI 红」（2026-11-22）
+## 42. W10：详情弹层可改品类 / 厚薄 / 场合（2026-11-22）
+
+之前这三个是只读的——可它们恰恰是推荐的三个核心输入（品类决定角色、厚薄决定温度匹配、场合决定筛选），录入选错就只能删了重录。后端 PATCH 一直支持，是弹层缺控件。
+
+- 弹层最上面加三块（品类 6 个 / 厚薄 3 个 + 不填 / 场合 4 个 + 不填），顺序在其它字段之前。
+- **品类不允许清空**（`items.category` NOT NULL），只能改成另一个；厚薄、场合可清空。
+- `buildItemPatch` 只在值变化时才带上这三项：`category` 原样、`warmth` 转数字或 null、`occasion` 字符串或 null。
+- 不新增校验：三个都是枚举选择，选不出非法值。
+
+**缓存会自动失效**：LLM 结果的缓存 key 里含 `wardrobe_hash = hash(id:updated_at)`，改任何一个字段都会让 `updated_at` 变，下次请求自然 miss。实测同一批单品改完再算，hash 从 `29c69c149fef` 变成 `4b8a5f7c7b78`。
+
+验证：前端 **71 passed**（68 + 3）/ typecheck 0 / build 0；真实接口 PATCH `occasion→work`、`warmth→null`、`category→outer` 都 200，验证后已还原原值；后端 203 条未动。
+
+### 补丁：按品类决定显示哪些字段
+
+`core/itemFields.ts` 的 `visibleFields(category)` 是一张显式的可见性矩阵：
+
+| 字段 | 品类限制 |
+|---|---|
+| 恒显示 | category / occasion / formality / color_family / brand / price / purchase_url / note / material / care_text |
+| warmth | 除 accessory 外都显示 |
+| layer | 只有 top / outer |
+| season / size | 除 accessory 外都显示 |
+| care_symbols | top / outer / bottom / dress（鞋与配饰不显示） |
+
+两条关键约束：
+
+1. **隐藏 ≠ 清空**：表单值仍留在 state 里，只是不渲染。用户把「上衣」切成「鞋」再切回来，原来的层次和洗护符号还在。
+2. **隐藏 ≠ 提交**：`buildItemPatch` 结尾按 `visibleFields(form.category)` 过滤一遍 patch，隐藏字段即便 form 里「看起来改过」也不会进请求——避免「切一下品类就把原值覆盖成 null」。
+
+录入页顺手同步：选「配饰」时厚薄那一排直接不渲染，`Q/W/E` 快捷键也忽略（否则会往一个没有意义的字段里写值）。
+
+**和原始需求的一处出入**：要求的测试「切到鞋后 warmth 不进 patch」与矩阵本身矛盾（warmth 对鞋是可见的）。所以落地的两条测试是：切到鞋后 **layer / care_symbols** 不进 patch；切到**配饰**后 **warmth** 不进 patch——两条都覆盖了「隐藏字段不提交」这个真正的意图。
+
+验证：前端 **77 passed**（71 + 4 + 2）/ typecheck 0 / build 0；后端 203 未动。
+
+## 43. 交付阶段的两次「本地绿、CI 红」（2026-11-22）
 
 第一次把仓库推上 GitHub，两个 CI job 全红。两次原因都不在代码逻辑，而在**环境差异**——恰好是 CI 存在的意义。
 
