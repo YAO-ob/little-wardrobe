@@ -115,13 +115,25 @@ def test_create_and_list(client):
 
 
 def test_incomplete_filter(client):
-    assert client.post("/api/items", json={"category": "shoes"}).status_code == 201
-    complete = client.post("/api/items", json={"category": "shoes", "color_family": "黑"}).json()
+    # 配饰没有厚薄概念：颜色 + 场合填齐就算完整，不因 warmth 缺失被标红
+    accessory = client.post(
+        "/api/items", json={"category": "accessory", "color_family": "黑", "occasion": "casual"}
+    ).json()
+    # 上衣核心字段（颜色 / 场合 / 厚薄）齐全 → 完整
+    complete = client.post(
+        "/api/items",
+        json={"category": "top", "color_family": "黑", "occasion": "casual", "warmth": 2},
+    ).json()
+    # 缺颜色 / 缺场合 / 缺厚薄 → 都该被标出来
+    client.post("/api/items", json={"category": "top", "occasion": "casual", "warmth": 2})
+    client.post("/api/items", json={"category": "top", "color_family": "黑", "warmth": 2})
+    client.post("/api/items", json={"category": "top", "color_family": "黑", "occasion": "casual"})
 
     listing = client.get("/api/items", params={"incomplete": "true"}).json()
     ids = {item["id"] for item in listing["items"]}
+    assert accessory["id"] not in ids
     assert complete["id"] not in ids
-    assert all(not item["color_family"] for item in listing["items"])
+    assert len(ids) >= 3
 
 
 def test_missing_staged_file_fails_loudly(client):

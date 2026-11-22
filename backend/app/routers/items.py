@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from ..config import get_settings
@@ -26,6 +26,10 @@ CATEGORY_LABELS = {
     "accessory": "配饰",
     "dress": "连衣裙",
 }
+
+# 与前端 core/itemFields.ts 的 WITH_WARMTH 保持一致：这些品类有厚薄概念，
+# warmth 为空才算「信息不全」；配饰没有厚薄，不因 warmth 缺失被标红。
+WARMTH_CATEGORIES = ("top", "outer", "bottom", "shoes", "dress")
 
 
 def _load(db: Session, item_id: int) -> Item:
@@ -170,7 +174,15 @@ def list_items(
     if q:
         conditions.append(Item.name.contains(q))
     if incomplete:
-        conditions.append(or_(Item.color_family.is_(None), Item.color_family == ""))
+        conditions.append(
+            or_(
+                Item.color_family.is_(None),
+                Item.color_family == "",
+                Item.occasion.is_(None),
+                Item.occasion == "",
+                and_(Item.category.in_(WARMTH_CATEGORIES), Item.warmth.is_(None)),
+            )
+        )
 
     total = db.execute(select(func.count()).select_from(Item).where(*conditions)).scalar_one()
     stmt = (

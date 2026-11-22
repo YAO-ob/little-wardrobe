@@ -2,7 +2,7 @@
 /** 字段可见性矩阵。 */
 
 import { describe, expect, it } from 'vitest'
-import { visibleFields } from '../itemFields'
+import { isIncomplete, visibleFields } from '../itemFields'
 import type { Category } from '../types'
 
 const ALL: Category[] = ['top', 'outer', 'bottom', 'shoes', 'accessory', 'dress']
@@ -34,5 +34,39 @@ describe('visibleFields', () => {
     for (const category of ALL) {
       expect(visibleFields(category).has('layer')).toBe(category === 'top' || category === 'outer')
     }
+  })
+})
+
+describe('isIncomplete', () => {
+  const complete = {
+    category: 'top' as Category,
+    color_family: '黑',
+    occasion: 'casual' as const,
+    warmth: 2 as const,
+  }
+
+  it('核心字段齐全 → 不标红', () => {
+    expect(isIncomplete(complete)).toBe(false)
+  })
+
+  it('缺颜色 → 标红', () => {
+    expect(isIncomplete({ ...complete, color_family: '' })).toBe(true)
+    expect(isIncomplete({ ...complete, color_family: null })).toBe(true)
+  })
+
+  it('缺场合 → 标红', () => {
+    expect(isIncomplete({ ...complete, occasion: null })).toBe(true)
+  })
+
+  it('上衣缺厚薄 → 标红', () => {
+    expect(isIncomplete({ ...complete, warmth: null })).toBe(true)
+  })
+
+  it('配饰缺厚薄不算不全（配饰本来就没厚薄）', () => {
+    expect(isIncomplete({ ...complete, category: 'accessory', warmth: null })).toBe(false)
+  })
+
+  it('配饰只要颜色和场合齐了就完整', () => {
+    expect(isIncomplete({ category: 'accessory', color_family: '黑', occasion: 'sport', warmth: null })).toBe(false)
   })
 })

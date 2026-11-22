@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { deleteItem, listItems } from '../../core/api'
+import { isIncomplete } from '../../core/itemFields'
 import { resolveDeleteClick } from '../../core/deleteConfirm'
 import { CATEGORIES, CATEGORY_LABEL, OCCASIONS, OCCASION_LABEL, WARMTH_LABEL } from '../../core/labels'
 import type { Category, Item, Occasion } from '../../core/types'
@@ -144,7 +145,7 @@ export default function GalleryPage() {
           </p>
           <div className="grid grid-cols-3 gap-2">
             {items.map((item) => {
-              const incomplete = !item.color_family
+              const incomplete = isIncomplete(item)
               return (
                 <figure
                   key={item.id}
