@@ -1305,4 +1305,39 @@ a) with key: 200 {brand: 优衣库, price: 199.0, material: 棉, color_family: �
 | 前端 | **68 passed**（65 + 3） / typecheck 0 / build 0 |
 | 真模型 + 真实截图 | **未执行**：没有 key，也不该用用户的 |
 
+## 42. 交付阶段的两次「本地绿、CI 红」（2026-11-22）
+
+第一次把仓库推上 GitHub，两个 CI job 全红。两次原因都不在代码逻辑，而在**环境差异**——恰好是 CI 存在的意义。
+
+### ① `.gitignore` 的 `data/` 吞掉了源码目录
+
+**现象**：backend job 14 秒失败，`ModuleNotFoundError: No module named 'app.data'`（`routers/cities.py` 导入 `..data.cities`）。
+
+**原因**：`.gitignore` 里为忽略仓库根目录的 SQLite 目录写了 `data/`。这个模式**匹配任意层级**同名目录，于是 `backend/app/data/`（`cities.py` + `__init__.py`）从第一天起就没进过仓库。本地测试全绿，因为文件就在磁盘上；`git status` 干净、`git add -A` 也不报错。
+
+**修法**：改成根锚定的 `/data/`，再把 `backend/app/data/` 补提交。
+
+**规矩**：`.gitignore` 里写 `data/`、`dist/`、`build/` 这类目录模式时，若不打算匹配全部层级，必须写成 `/data/`。验证方式：`git check-ignore -v <路径>` 会指出是哪一行规则命中的。
+
+### ② CI 的 Node 版本比本地老，依赖起不来
+
+**现象**：frontend job 18 秒失败，12 个测试文件全部 `[vitest-pool]: Failed to start threads worker`，根因链是 `undici@8.12.4/lib/interceptor/decompress.js:78` 抛 `TypeError: Cannot read properties of undefined (reading 'bind')`。
+
+**原因**：`ci.yml` 写 `node-version: 20`，本地是 Node 24。undici 8 用到了 Node 22+ 才有的 zlib 接口，在 Node 20 上是 `undefined`，`.bind()` 直接崩——表现不是「测试失败」，而是**测试根本没跑起来**。
+
+**修法**：`node-version: 24`、`pnpm/action-setup` 的 `version: 11`（与本地一致）。
+
+**规矩**：CI 的 Node / pnpm 版本必须与开发机对齐，否则会出现「依赖装得上、但跑不起来」这种最难查的形态——install 那步是绿的，跑测试才炸。
+
+### 共同点
+
+这两类问题都有相同的三个特征：`git status` 干净、本地测试全绿、`git add -A` 不报错。**只有干净克隆才暴露**。
+
+所以 CI 的价值不在「再跑一遍测试」，而在**复现别人的环境**：新机器、新版本、空目录。它也确实抓到了两个本地永远抓不到的问题。
+
+### 附：这段排查里另外确认的两件事
+
+1. **HTTPS 到 github.com 在本机会被重置**（`Recv failure: Connection was reset`，443 端口 8 秒超时），但 SSH 22 端口通（106ms）。改走 SSH（`git@github.com:...`）后推送正常。
+2. README 的 CI 徽标只看**默认分支最新一次运行**，之前失败的历史记录不影响它；那些红灯反而是「发现问题并修掉」的证据，不建议删。
+
 
