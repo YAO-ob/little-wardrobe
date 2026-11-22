@@ -102,7 +102,7 @@ function CaptureEntry({ cameraRef, albumRef, onPick, compact = false }: CaptureE
     </>
   )
 }
-export default function CapturePage({ onOpenGallery }: { onOpenGallery: () => void }) {
+export default function CapturePage({ onClose }: { onClose: () => void }) {
   const queryClient = useQueryClient()
   const containerRef = useRef<HTMLDivElement>(null)
   // 两个入口：拍照走相机、相册走文件选择（capture 与 multiple 不能同时保证行为一致）
@@ -327,178 +327,189 @@ export default function CapturePage({ onOpenGallery }: { onOpenGallery: () => vo
   }
 
   return (
-    <div ref={containerRef} tabIndex={-1} className="space-y-4 outline-none">
-      {current ? (
-        <>
-          <div className="relative overflow-hidden rounded-2xl bg-black/5">
-            <img src={current.preview} alt="待录入单品" className="max-h-[34vh] w-full object-contain" />
-            <span className="absolute left-2 top-2 rounded-full bg-black/70 px-2 py-0.5 text-[11px] text-white">
-              待录入 {remaining}
-            </span>
-          </div>
-
-          <div className="flex gap-2 overflow-x-auto pb-1">
-            {drafts.slice(0, 8).map((draft, index) => (
-              <button
-                key={draft.id}
-                type="button"
-                onClick={() => {
-                  if (index === 0) return
-                  setDrafts((prev) => {
-                    const next = [...prev]
-                    const [picked] = next.splice(index, 1)
-                    next.unshift(picked)
-                    return next
-                  })
-                }}
-                className={`h-12 w-12 shrink-0 overflow-hidden rounded-lg border-2 ${
-                  index === 0 ? 'border-black' : 'border-transparent opacity-70'
-                }`}
-              >
-                <img src={draft.preview} alt="" className="h-full w-full object-cover" />
-              </button>
-            ))}
-            {remaining > 8 && (
-              <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-black/5 text-xs text-black/50">
-                +{remaining - 8}
-              </span>
-            )}
-          </div>
-
-          <section>
-            <p className="mb-2 flex items-center gap-2 text-xs font-medium text-black/50">
-              品类（1-6）
-              {autoClassify && current.uploadState === 'uploading' && (
-                <span className="text-[11px] font-normal text-black/35">正在识别…</span>
-              )}
-            </p>
-            <div className="grid grid-cols-3 gap-2">
-              {CATEGORIES.map((c) => {
-                const suggested =
-                  current.categorySource !== 'user' && current.suggestion?.category === c.value
-                const selected = current.category === c.value
-                return (
-                  <button
-                    key={c.value}
-                    type="button"
-                    onClick={() => pickCategory(c.value)}
-                    className={`relative flex flex-col items-center gap-1 rounded-xl border py-3 text-sm transition ${
-                      selected
-                        ? 'border-black bg-black text-white'
-                        : suggested
-                          ? 'border-dashed border-black/40 bg-white text-black/60'
-                          : 'border-black/10 bg-white text-black/80'
-                    }`}
-                  >
-                    <span className="text-xl">{c.icon}</span>
-                    {c.label}
-                    {suggested && !selected && (
-                      <span className="absolute right-1 top-1 rounded-full bg-black/10 px-1.5 py-0.5 text-[9px] leading-none text-black/50">
-                        建议
-                      </span>
-                    )}
-                  </button>
-                )
-              })}
-            </div>
-          </section>
-
-          {current.category !== 'accessory' && (
-            <section>
-              <p className="mb-2 text-xs font-medium text-black/50">厚薄（Q/W/E）</p>
-            <div className="grid grid-cols-3 gap-2">
-              {WARMTHS.map((w) => {
-                const suggested =
-                  current.warmthSource !== 'user' && current.suggestion?.warmth === w.value
-                const selected = current.warmth === w.value
-                return (
-                  <button
-                    key={w.value}
-                    type="button"
-                    onClick={() => pickWarmth(w.value)}
-                    className={`relative rounded-xl border py-2 text-sm transition ${
-                      selected
-                        ? 'border-black bg-black text-white'
-                        : suggested
-                          ? 'border-dashed border-black/40 bg-white text-black/60'
-                          : 'border-black/10 bg-white text-black/80'
-                    }`}
-                  >
-                    {w.label}
-                    {suggested && !selected && (
-                      <span className="absolute right-1 top-0.5 rounded-full bg-black/10 px-1 py-0.5 text-[9px] leading-none text-black/50">
-                        建议
-                      </span>
-                    )}
-                  </button>
-                )
-              })}
-            </div>
-            </section>
-          )}
-
-          <section>
-            <p className="mb-2 text-xs font-medium text-black/50">场合</p>
-            <div className="grid grid-cols-4 gap-2">
-              {OCCASIONS.map((o) => (
-                <button
-                  key={o.value}
-                  type="button"
-                  onClick={() => patch({ occasion: o.value })}
-                  className={`rounded-xl border py-2 text-sm transition ${
-                    current.occasion === o.value
-                      ? 'border-black bg-black text-white'
-                      : 'border-black/10 bg-white text-black/80'
-                  }`}
-                >
-                  {o.label}
-                </button>
-              ))}
-            </div>
-          </section>
-
-          {error && <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
-
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => void save()}
-              disabled={busy}
-              className="min-w-[6.5rem] flex-1 rounded-xl bg-black px-3 py-3 text-sm font-medium text-white disabled:opacity-40"
-            >
-              {busy ? '保存中…' : `保存${saved > 0 ? `（已存 ${saved}）` : ''}`}
-            </button>
-            <CaptureEntry
-              cameraRef={cameraRef}
-              albumRef={albumRef}
-              onPick={onPick}
-              compact
-            />
-            <button
-              type="button"
-              onClick={dropCurrent}
-              className="rounded-xl border border-black/10 bg-white px-4 py-3 text-sm text-black/50"
-            >
-              跳过
-            </button>
-          </div>
-        </>
-      ) : (
-        <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-2">
-            <CaptureEntry cameraRef={cameraRef} albumRef={albumRef} onPick={onPick} />
-          </div>
-          <p className="text-center text-xs text-black/40">{hint}</p>
-          <div className="rounded-xl bg-black/5 px-3 py-2 text-center text-xs text-black/50">
-            本次已录入 {saved} 件
-            {saved > 0 && (
-              <button type="button" onClick={onOpenGallery} className="ml-2 underline">
-                看衣柜
-              </button>
-            )}
-          </div>
+    <div className="sheet-enter fixed inset-0 z-50 overflow-y-auto bg-paper">
+      <div className="mx-auto max-w-xl px-4 py-4 pb-24">
+        <div className="mb-3 flex items-center justify-between">
+          <button type="button" onClick={onClose} className="text-sm text-black/50">
+            ← 返回
+          </button>
+          <span className="text-sm font-medium">录入</span>
+          <span className="w-10" />
         </div>
-      )}
+        <div ref={containerRef} tabIndex={-1} className="space-y-4 outline-none">
+          {current ? (
+            <>
+              <div className="relative overflow-hidden rounded-2xl bg-black/5">
+                <img src={current.preview} alt="待录入单品" className="max-h-[34vh] w-full object-contain" />
+                <span className="absolute left-2 top-2 rounded-full bg-black/70 px-2 py-0.5 text-[11px] text-white">
+                  待录入 {remaining}
+                </span>
+              </div>
+
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {drafts.slice(0, 8).map((draft, index) => (
+                  <button
+                    key={draft.id}
+                    type="button"
+                    onClick={() => {
+                      if (index === 0) return
+                      setDrafts((prev) => {
+                        const next = [...prev]
+                        const [picked] = next.splice(index, 1)
+                        next.unshift(picked)
+                        return next
+                      })
+                    }}
+                    className={`h-12 w-12 shrink-0 overflow-hidden rounded-lg border-2 ${
+                      index === 0 ? 'border-black' : 'border-transparent opacity-70'
+                    }`}
+                  >
+                    <img src={draft.preview} alt="" className="h-full w-full object-cover" />
+                  </button>
+                ))}
+                {remaining > 8 && (
+                  <span className="flex h-12 w-12 shrink-0 items-center justify-center rounded-lg bg-black/5 text-xs text-black/50">
+                    +{remaining - 8}
+                  </span>
+                )}
+              </div>
+
+              <section>
+                <p className="mb-2 flex items-center gap-2 text-xs font-medium text-black/50">
+                  品类（1-6）
+                  {autoClassify && current.uploadState === 'uploading' && (
+                    <span className="text-[11px] font-normal text-black/35">正在识别…</span>
+                  )}
+                </p>
+                <div className="grid grid-cols-3 gap-2">
+                  {CATEGORIES.map((c) => {
+                    const suggested =
+                      current.categorySource !== 'user' && current.suggestion?.category === c.value
+                    const selected = current.category === c.value
+                    return (
+                      <button
+                        key={c.value}
+                        type="button"
+                        onClick={() => pickCategory(c.value)}
+                        className={`relative flex flex-col items-center gap-1 rounded-xl border py-3 text-sm transition ${
+                          selected
+                            ? 'border-black bg-black text-white'
+                            : suggested
+                              ? 'border-dashed border-black/40 bg-white text-black/60'
+                              : 'border-black/10 bg-white text-black/80'
+                        }`}
+                      >
+                        <span className="text-xl">{c.icon}</span>
+                        {c.label}
+                        {suggested && !selected && (
+                          <span className="absolute right-1 top-1 rounded-full bg-black/10 px-1.5 py-0.5 text-[9px] leading-none text-black/50">
+                            建议
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+              </section>
+
+              {current.category !== 'accessory' && (
+                <section>
+                  <p className="mb-2 text-xs font-medium text-black/50">厚薄（Q/W/E）</p>
+                <div className="grid grid-cols-3 gap-2">
+                  {WARMTHS.map((w) => {
+                    const suggested =
+                      current.warmthSource !== 'user' && current.suggestion?.warmth === w.value
+                    const selected = current.warmth === w.value
+                    return (
+                      <button
+                        key={w.value}
+                        type="button"
+                        onClick={() => pickWarmth(w.value)}
+                        className={`relative rounded-xl border py-2 text-sm transition ${
+                          selected
+                            ? 'border-black bg-black text-white'
+                            : suggested
+                              ? 'border-dashed border-black/40 bg-white text-black/60'
+                              : 'border-black/10 bg-white text-black/80'
+                        }`}
+                      >
+                        {w.label}
+                        {suggested && !selected && (
+                          <span className="absolute right-1 top-0.5 rounded-full bg-black/10 px-1 py-0.5 text-[9px] leading-none text-black/50">
+                            建议
+                          </span>
+                        )}
+                      </button>
+                    )
+                  })}
+                </div>
+                </section>
+              )}
+
+              <section>
+                <p className="mb-2 text-xs font-medium text-black/50">场合</p>
+                <div className="grid grid-cols-4 gap-2">
+                  {OCCASIONS.map((o) => (
+                    <button
+                      key={o.value}
+                      type="button"
+                      onClick={() => patch({ occasion: o.value })}
+                      className={`rounded-xl border py-2 text-sm transition ${
+                        current.occasion === o.value
+                          ? 'border-black bg-black text-white'
+                          : 'border-black/10 bg-white text-black/80'
+                      }`}
+                    >
+                      {o.label}
+                    </button>
+                  ))}
+                </div>
+              </section>
+
+              {error && <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void save()}
+                  disabled={busy}
+                  className="min-w-[6.5rem] flex-1 rounded-xl bg-black px-3 py-3 text-sm font-medium text-white disabled:opacity-40"
+                >
+                  {busy ? '保存中…' : `保存${saved > 0 ? `（已存 ${saved}）` : ''}`}
+                </button>
+                <CaptureEntry
+                  cameraRef={cameraRef}
+                  albumRef={albumRef}
+                  onPick={onPick}
+                  compact
+                />
+                <button
+                  type="button"
+                  onClick={dropCurrent}
+                  className="rounded-xl border border-black/10 bg-white px-4 py-3 text-sm text-black/50"
+                >
+                  跳过
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-2">
+                <CaptureEntry cameraRef={cameraRef} albumRef={albumRef} onPick={onPick} />
+              </div>
+              <p className="text-center text-xs text-black/40">{hint}</p>
+              <div className="rounded-xl bg-black/5 px-3 py-2 text-center text-xs text-black/50">
+                本次已录入 {saved} 件
+                {saved > 0 && (
+                  <button type="button" onClick={onClose} className="ml-2 underline">
+                    看衣柜
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
