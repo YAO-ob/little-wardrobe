@@ -1604,3 +1604,37 @@ a) with key: 200 {brand: 优衣库, price: 199.0, material: 棉, color_family: �
 - 没动后端、没动 API、没动录入逻辑，纯前端导航结构调整。
 
 
+## 49. 场合 occasion 改多值 + 录入时 AI 自动标场合（方案 C）（2026-11-22）
+
+### 选了什么
+
+- `occasion` 从单值（`String(16)`）改成**多值数组**：DB 列改 `Text` 存 JSON 数组字符串（和 `season` / `care_symbols` 同模式），空存 `NULL`；`schemas.py` 新增 `parse_occasion` 做 raw→list，出口只放行枚举内的值；`items` 路由 create/update 序列化、list 筛选改 `LIKE '%"x"%'` 包含匹配。
+- 新建迁移 `b8e3f1a2c7d4_occasion_multi.py`（`down_revision = c43a9b2d4cb9`）：先把存量单值 `UPDATE` 成 `["x"]`、空串置 NULL，再 drop 旧索引、改列类型。用真实库副本验证：88 件单值全部正确转数组，**零丢失**；空库从 baseline 升到 head 也通过。
+- **录入页完全隐藏场合选择 UI**，场合由 AI（classify）自动识别预填：`SYSTEM_PROMPT` 要求输出 `occasion` 数组（0~3 个，值限 4 枚举；看不清给空数组）；`_validate` 逐字段容错，越界元素丢弃、非数组归一为空。事后在详情弹窗改。
+- 规则层：`RuleItem.occasion` 改 `list[str]`；`_usable` 用 `occasion in item.occasion` 匹配；`formality_level` 多场合时取**与目标正式度最接近**的那个场合的正式度，避免被平均 / 取第一个拉低排名。
+- 前端：`Item.occasion` / `NewItem.occasion` 改 `Occasion[]`；`itemFields.isIncomplete` 修 JS 空数组真值坑（`!item.occasion?.length`，因为 `![]` 在 JS 是 `false`）；`itemPatch` 用 `sameList` 比较；详情弹窗场合改多选 chips（可取消，不选 = 任何场合可用）；图库卡片角标适配多值展示。
+- 目标场合（target occasion，用户今天想去的场合）仍单值：`build_outfits(..., occasion)` / `filter_usable` / `ChatIn.occasion` / 推荐 query param / 筛选面板全部不动。
+
+### 为什么
+
+用户反馈「场合自己选很鸡肋，一件衣服常适合多种场合」。单值会逼用户二选一（一件衬衫既日常又通勤却只能标一个），还让场合筛选漏衣服。
+
+方案 C = 方案 B（数据层多值化）+ AI 在录入时自动标场合：
+1. 多值让一件衣服标 [日常, 通勤]，筛选任一场合都能命中；
+2. 录入页不让用户选场合——AI 看一眼就标好，省掉录入时的心智负担；
+3. **空数组 = 任何场合可用**（不锁死）：AI 看不清 / 置信度低就留空，这件衣服在所有场合筛选下都不会被排除。这比「AI 硬猜一个标错」更安全——标错会把衣服错误排除，留空只是放弃精确筛选。
+
+### 没选什么
+
+- 没让目标场合（target）也改多值：用户一次只去一个场合，单值足够，改多值只会让「今天穿什么」的语义变模糊。
+- 没在录入页保留场合手动选择：方案 C 的核心就是录入零心智，场合完全交给 AI；想改去详情弹窗。
+- 没给 `occasion` 建索引：JSON 数组文本上的等值索引无意义，筛选走 `LIKE` 包含匹配（数据量小，可接受）。
+
+### 验证
+
+- 后端：`226 passed`（基线 203，含新增 3 个 classify occasion 测试），0 failed。
+- 前端：`typecheck 0 错误 / test 83 passed / build 成功`。
+- 迁移：真实库副本 88 件单值→数组，count 88→88 零丢失；空库 upgrade head 通过。
+
+
+
