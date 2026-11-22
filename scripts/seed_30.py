@@ -52,7 +52,7 @@ def main() -> int:
                 json={
                     "category": random.choice(CATEGORIES),
                     "warmth": random.choice([1, 2, 3]),
-                    "occasion": random.choice(OCCASIONS),
+                    "occasion": random.sample(OCCASIONS, random.randint(1, 2)),
                     "color_family": random.choice(["黑", "白", "灰", "蓝", "棕"]),
                     "image_ids": [image["id"]],
                 },

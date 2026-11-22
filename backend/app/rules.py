@@ -9,7 +9,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # --- 阈值常量（改这里，不要散落魔法数） -----------------------------------
 
@@ -65,7 +65,7 @@ class RuleItem:
     id: int
     category: str
     warmth: int | None = None
-    occasion: str | None = None
+    occasion: list[str] = field(default_factory=list)
     # 下面两项：库里存了就优先用，没存才按品类/场合推导
     formality: int | None = None
     layer: str | None = None
@@ -104,9 +104,23 @@ def formality_of(occasion: str | None) -> int:
     return FORMALITY_BY_OCCASION.get(occasion or "", 2)
 
 
-def formality_level(item: RuleItem) -> int:
-    """存量优先：用户填了正式度就用它，没填才按场合推导。"""
-    return item.formality if item.formality is not None else formality_of(item.occasion)
+def formality_level(item: RuleItem, target_formality: int | None = None) -> int:
+    """存量优先：用户填了正式度就用它，没填才按场合推导。
+
+    多场合时取与目标正式度最接近的那个——用户选了「通勤」，
+    一件标了 [日常, 通勤] 的衣服在通勤场景下就按通勤的正式度算，
+    不会被平均或取第一个拉低排名。
+    """
+    if item.formality is not None:
+        return item.formality
+    occasions = item.occasion or []
+    if not occasions:
+        return 2  # 没场合按日常算
+    if target_formality is not None:
+        return min(
+            (formality_of(o) for o in occasions), key=lambda f: abs(f - target_formality)
+        )
+    return formality_of(occasions[0])
 
 
 def need_warmth(feels_min: float) -> int:
@@ -132,7 +146,7 @@ def _warmth(item: RuleItem) -> int:
 
 
 def _item_key(item: RuleItem, target_warmth: int, target_formality: int) -> tuple[int, int, int]:
-    item_formality = formality_level(item)
+    item_formality = formality_level(item, target_formality)
     return (
         abs(_warmth(item) - target_warmth),
         abs(item_formality - target_formality),
@@ -145,10 +159,10 @@ def _rank(items: list[RuleItem], target_warmth: int, target_formality: int) -> l
 
 
 def _usable(item: RuleItem, occasion: str | None) -> bool:
-    """场合为空也算可用；否则必须匹配。"""
+    """目标场合为空 = 不过滤；衣服没标场合 = 任何场合可用；否则目标场合须在衣服场合列表里。"""
     if not occasion:
         return True
-    return not item.occasion or item.occasion == occasion
+    return not item.occasion or occasion in item.occasion
 
 
 def filter_usable(items: list[RuleItem], occasion: str | None) -> list[RuleItem]:

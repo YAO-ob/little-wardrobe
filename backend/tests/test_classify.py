@@ -95,6 +95,7 @@ def test_classify_returns_llm_result(client):
         "category": "shoes",
         "warmth": 2,
         "color_family": None,
+        "occasion": [],
         "confidence": 0.9,
         "source": "llm",
         "reason": None,
@@ -224,3 +225,55 @@ def test_sent_image_is_downscaled_jpeg(client):
     with Image.open(io.BytesIO(raw)) as sent:
         assert sent.format == "JPEG"
         assert max(sent.size) <= 512
+
+
+def test_occasion_multi_values_returned(client):
+    """AI 标了多个场合 → 原样返回数组。"""
+    FakeClient.response = completion(
+        json.dumps(
+            {
+                "category": "top",
+                "warmth": 2,
+                "color_family": "blue",
+                "occasion": ["casual", "work"],
+                "confidence": 0.9,
+            }
+        )
+    )
+
+    body = classify_image(client, make_image(client))
+
+    assert body["occasion"] == ["casual", "work"]
+    assert body["source"] == "llm"
+
+
+def test_occasion_invalid_values_are_dropped(client):
+    """越界场合值丢弃，不连累其他字段；只保留合法枚举。"""
+    FakeClient.response = completion(
+        json.dumps(
+            {
+                "category": "shoes",
+                "warmth": 2,
+                "occasion": ["casual", "party", 123, "work"],
+                "confidence": 0.9,
+            }
+        )
+    )
+
+    body = classify_image(client, make_image(client))
+
+    assert body["occasion"] == ["casual", "work"]
+    assert body["category"] == "shoes"  # 其他字段不受连累
+
+
+def test_occasion_not_a_list_returns_empty(client):
+    """模型把 occasion 写成字符串而非数组 → 归一为空数组（任何场合可用）。"""
+    FakeClient.response = completion(
+        json.dumps(
+            {"category": "shoes", "warmth": 2, "occasion": "casual", "confidence": 0.9}
+        )
+    )
+
+    body = classify_image(client, make_image(client))
+
+    assert body["occasion"] == []

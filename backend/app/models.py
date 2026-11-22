@@ -33,7 +33,7 @@ class Item(Base):
     color_family: Mapped[str | None] = mapped_column(String(16))
     color_hex: Mapped[str | None] = mapped_column(String(9))
     season: Mapped[str | None] = mapped_column(Text)  # JSON 数组字符串
-    occasion: Mapped[str | None] = mapped_column(String(16), index=True)
+    occasion: Mapped[str | None] = mapped_column(Text)  # JSON 数组字符串，编码同 season
     warmth: Mapped[int | None] = mapped_column(Integer)  # 1 薄 2 中 3 厚
     formality: Mapped[int | None] = mapped_column(Integer)  # 1-5
     layer: Mapped[str | None] = mapped_column(String(8))  # inner / mid / outer

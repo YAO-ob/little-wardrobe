@@ -20,7 +20,7 @@ from ..config import get_settings
 from ..db import get_db
 from ..llm import LLMError, chat_json_with_image, resolve_llm_config
 from ..models import Image
-from ..schemas import COLOR_FAMILIES, ClassifyIn, ClassifyOut
+from ..schemas import COLOR_FAMILIES, OCCASIONS, ClassifyIn, ClassifyOut
 
 logger = logging.getLogger(__name__)
 
@@ -37,15 +37,19 @@ JPEG_QUALITY = 80
 _cache: dict[int, tuple[float, ClassifyOut]] = {}
 
 SYSTEM_PROMPT = (
-    "你是服装录入助手。看图判断三件事：品类（category）、厚薄（warmth）、家族色（color_family）。\n"
+    "你是服装录入助手。看图判断四件事：品类（category）、厚薄（warmth）、家族色（color_family）、"
+    "适用场合（occasion）。\n"
     "category 只能是：top（上装/衬衫/毛衣）、outer（外套）、bottom（下装/裤裙）、"
     "shoes（鞋）、accessory（配饰）、dress（连衣裙）。\n"
     "warmth 只能是 1（薄）、2（中）、3（厚），拿不准给 null。\n"
     "color_family 只能从这些里选：black/white/gray/beige/brown/blue/navy/green/red/pink/"
     "purple/yellow/orange/multi。只说家族色，不要猜精确色号、不要给 hex；"
     "有图案、多色或看不清就给 multi 或 null。\n"
+    "occasion 是数组，元素只能从 casual（日常）、work（通勤/正式办公）、sport（运动）、"
+    "formal（正式礼服）里选；一件衣服常适合多种场合，标 0~3 个最贴切的；"
+    "看不准适用场合就给空数组 []，宁可少标不要乱标。\n"
     "不要判断材质和品牌。看不清就给低 confidence。\n"
-    '只输出 JSON，形如 {"category": "shoes", "warmth": 2, "color_family": "black", "confidence": 0.9}'
+    '只输出 JSON，形如 {"category": "shoes", "warmth": 2, "color_family": "black", "occasion": ["casual"], "confidence": 0.9}'
 )
 
 USER_PROMPT = "这张图里的单品是什么？按 schema 输出 JSON。"
@@ -71,6 +75,7 @@ def _result(
     category: str | None = None,
     warmth: int | None = None,
     color_family: str | None = None,
+    occasion: list[str] | None = None,
     confidence: float | None = None,
     source: str = "none",
     reason: str | None = None,
@@ -79,6 +84,7 @@ def _result(
         category=category,
         warmth=warmth,
         color_family=color_family,
+        occasion=occasion or [],
         confidence=confidence,
         source=source,
         reason=reason,
@@ -125,13 +131,25 @@ def _validate(data: dict) -> ClassifyOut:
         color = None
         invalid = True
 
+    # occasion 容错：必须是数组，越界元素丢弃（不连累其他字段）；空数组 = 看不清 / 任何场合可用
+    raw_occasion = data.get("occasion")
+    if isinstance(raw_occasion, list):
+        occasion = [o for o in raw_occasion if isinstance(o, str) and o in OCCASIONS]
+    else:
+        occasion = []
+
     if category is None and warmth is None and color is None:
-        return _result(confidence=confidence, reason="invalid_label" if invalid else "no_fields")
+        return _result(
+            occasion=occasion,
+            confidence=confidence,
+            reason="invalid_label" if invalid else "no_fields",
+        )
 
     return _result(
         category=category,
         warmth=warmth,
         color_family=color,
+        occasion=occasion,
         confidence=confidence,
         source="llm",
         reason="invalid_label" if invalid else None,

@@ -128,7 +128,7 @@ def create_item(payload: ItemCreate, db: Session = Depends(get_db)) -> ItemOut:
         color_family=payload.color_family,
         color_hex=payload.color_hex,
         season=json.dumps(payload.season, ensure_ascii=False) if payload.season else None,
-        occasion=payload.occasion,
+        occasion=json.dumps(payload.occasion, ensure_ascii=False) if payload.occasion else None,
         warmth=payload.warmth,
         formality=payload.formality,
         layer=payload.layer,
@@ -170,7 +170,8 @@ def list_items(
     if category:
         conditions.append(Item.category.in_(category))
     if occasion:
-        conditions.append(Item.occasion == occasion)
+        # occasion 列存 JSON 数组字符串（如 ["casual","work"]），用 LIKE 匹配是否包含目标场合
+        conditions.append(Item.occasion.like(f'%"{occasion}"%'))
     if q:
         conditions.append(Item.name.contains(q))
     if incomplete:
@@ -212,6 +213,9 @@ def update_item(item_id: int, payload: ItemUpdate, db: Session = Depends(get_db)
     if "care_symbols" in data:
         symbols = data.pop("care_symbols") or []
         item.care_symbols = json.dumps(symbols, ensure_ascii=False) if symbols else None
+    if "occasion" in data:
+        occasions = data.pop("occasion") or []
+        item.occasion = json.dumps(occasions, ensure_ascii=False) if occasions else None
     for field, value in data.items():
         setattr(item, field, value)
     item.updated_at = utcnow()

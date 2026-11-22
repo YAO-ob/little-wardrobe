@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 Category = Literal["top", "outer", "bottom", "shoes", "accessory", "dress"]
 Occasion = Literal["casual", "work", "sport", "formal"]
+OCCASIONS: tuple[str, ...] = ("casual", "work", "sport", "formal")
 Layer = Literal["inner", "mid", "outer"]
 
 # 洗护符号只允许这 12 个编码：自由文本会让「30度/30℃/温水」三种写法并存，
@@ -81,6 +82,15 @@ def _validate_care_symbols(value: list[str] | None) -> list[str] | None:
             raise ValueError(f"洗护符号互斥：{'、'.join(chosen)} 只能选一个")
     return value
 
+
+def _validate_occasion(value: list[str] | None) -> list[str] | None:
+    if value is None:
+        return None
+    unknown = [v for v in value if v not in OCCASIONS]
+    if unknown:
+        raise ValueError(f"场合只能是这些之一：{'、'.join(OCCASIONS)}（中文只用于显示）")
+    return value
+
 MEDIA_URL = "/media"
 
 
@@ -111,7 +121,7 @@ class ItemCreate(BaseModel):
     color_family: str | None = None
     color_hex: str | None = None
     season: list[str] = Field(default_factory=list)
-    occasion: Occasion | None = None
+    occasion: list[Occasion] = Field(default_factory=list)
     warmth: int | None = Field(default=None, ge=1, le=3)
     formality: int | None = Field(default=None, ge=1, le=5)
     layer: Layer | None = None
@@ -129,6 +139,7 @@ class ItemCreate(BaseModel):
 
     _care = field_validator("care_symbols")(_validate_care_symbols)
     _color = field_validator("color_family")(_validate_color_family)
+    _occ = field_validator("occasion")(_validate_occasion)
 
 
 class ItemUpdate(BaseModel):
@@ -138,7 +149,7 @@ class ItemUpdate(BaseModel):
     color_family: str | None = None
     color_hex: str | None = None
     season: list[str] | None = None
-    occasion: Occasion | None = None
+    occasion: list[Occasion] | None = None
     warmth: int | None = Field(default=None, ge=1, le=3)
     formality: int | None = Field(default=None, ge=1, le=5)
     layer: Layer | None = None
@@ -154,6 +165,7 @@ class ItemUpdate(BaseModel):
 
     _care = field_validator("care_symbols")(_validate_care_symbols)
     _color = field_validator("color_family")(_validate_color_family)
+    _occ = field_validator("occasion")(_validate_occasion)
 
 
 class ItemOut(BaseModel):
@@ -166,7 +178,7 @@ class ItemOut(BaseModel):
     color_family: str | None = None
     color_hex: str | None = None
     season: list[str] = Field(default_factory=list)
-    occasion: str | None = None
+    occasion: list[str] = Field(default_factory=list)
     warmth: int | None = None
     formality: int | None = None
     layer: str | None = None
@@ -321,6 +333,7 @@ class ClassifyOut(BaseModel):
     category: str | None = None
     warmth: int | None = None
     color_family: str | None = None
+    occasion: list[str] = Field(default_factory=list)
     confidence: float | None = None
     source: str = "none"
     reason: str | None = None
@@ -392,6 +405,20 @@ def parse_season(raw: str | None) -> list[str]:
     return [str(v) for v in value] if isinstance(value, list) else []
 
 
+def parse_occasion(raw: str | None) -> list[str]:
+    """DB 里存 JSON 数组字符串；兼容迁移前的单值存量（"work" → ["work"]）。"""
+    if not raw:
+        return []
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return [raw] if raw in OCCASIONS else []
+    if isinstance(value, list):
+        return [v for v in (str(x) for x in value) if v in OCCASIONS]
+    text = str(value)
+    return [text] if text in OCCASIONS else []
+
+
 def parse_care_symbols(raw: str | None) -> list[str]:
     if not raw:
         return []
@@ -432,7 +459,7 @@ def item_to_out(item) -> ItemOut:  # noqa: ANN001
         color_family=item.color_family if item.color_family in COLOR_FAMILIES else None,
         color_hex=item.color_hex,
         season=parse_season(item.season),
-        occasion=item.occasion,
+        occasion=parse_occasion(item.occasion),
         warmth=item.warmth,
         formality=item.formality,
         layer=item.layer,

@@ -18,9 +18,11 @@ from .llm_pick import pick_with_llm
 from .models import Item, LlmMetric, utcnow
 from .rules import RuleItem, WeatherFacts, build_outfits, layer_of
 from .schemas import (
+    OCCASIONS,
     RecommendItemOut,
     RecommendOut,
     RecommendOutfitOut,
+    parse_occasion,
     primary_thumb,
 )
 from .routers.weather import resolve_weather, weather_out
@@ -105,7 +107,7 @@ def to_rule_items(rows: list[Item]) -> dict[int, RuleItem]:
             id=row.id,
             category=row.category,
             warmth=row.warmth,
-            occasion=row.occasion,
+            occasion=parse_occasion(row.occasion),
             formality=row.formality,
             layer=row.layer,
         )

@@ -23,21 +23,21 @@ from app.rules import (
 def wardrobe() -> list[RuleItem]:
     """一套够用的合成衣橱：每类都有冷/中/热三档，覆盖常见情形。"""
     return [
-        RuleItem(1, "top", 1, "casual"),
-        RuleItem(2, "top", 2, "casual"),
-        RuleItem(3, "top", 3, "casual"),
-        RuleItem(4, "top", 2, None),
-        RuleItem(10, "bottom", 2, "casual"),
-        RuleItem(11, "bottom", 3, "work"),
-        RuleItem(12, "bottom", 1, "sport"),
-        RuleItem(13, "bottom", 2, None),
-        RuleItem(20, "shoes", 2, "casual"),
-        RuleItem(21, "shoes", 2, "sport"),
-        RuleItem(22, "shoes", 2, None),
-        RuleItem(30, "outer", 3, "casual"),
-        RuleItem(31, "outer", 2, None),
-        RuleItem(40, "accessory", 1, None),
-        RuleItem(41, "accessory", 2, "work"),
+        RuleItem(1, "top", 1, ["casual"]),
+        RuleItem(2, "top", 2, ["casual"]),
+        RuleItem(3, "top", 3, ["casual"]),
+        RuleItem(4, "top", 2),
+        RuleItem(10, "bottom", 2, ["casual"]),
+        RuleItem(11, "bottom", 3, ["work"]),
+        RuleItem(12, "bottom", 1, ["sport"]),
+        RuleItem(13, "bottom", 2),
+        RuleItem(20, "shoes", 2, ["casual"]),
+        RuleItem(21, "shoes", 2, ["sport"]),
+        RuleItem(22, "shoes", 2),
+        RuleItem(30, "outer", 3, ["casual"]),
+        RuleItem(31, "outer", 2),
+        RuleItem(40, "accessory", 1),
+        RuleItem(41, "accessory", 2, ["work"]),
     ]
 
 
@@ -106,25 +106,28 @@ def test_layer_and_formality_derivation():
 
 def test_stored_layer_wins_over_category():
     """用户补录了 layer，就按补录的算；没填才按品类推导。"""
-    assert layer_of(RuleItem(1, "top", 2, "casual", layer="outer")) == "outer"
-    assert layer_of(RuleItem(2, "top", 2, "casual")) == "inner"
-    assert layer_of(RuleItem(3, "outer", 3, "casual", layer=None)) == "outer"
+    assert layer_of(RuleItem(1, "top", 2, ["casual"], layer="outer")) == "outer"
+    assert layer_of(RuleItem(2, "top", 2, ["casual"])) == "inner"
+    assert layer_of(RuleItem(3, "outer", 3, ["casual"], layer=None)) == "outer"
 
 
 def test_stored_formality_wins_over_occasion():
-    assert formality_level(RuleItem(1, "top", 2, "casual", formality=5)) == 5
-    assert formality_level(RuleItem(2, "top", 2, "casual")) == 2
-    assert formality_level(RuleItem(3, "top", 2, "work")) == 4
+    assert formality_level(RuleItem(1, "top", 2, ["casual"], formality=5)) == 5
+    assert formality_level(RuleItem(2, "top", 2, ["casual"])) == 2
+    assert formality_level(RuleItem(3, "top", 2, ["work"])) == 4
+    # 多场合：给了目标正式度就取最接近的那个场合
+    assert formality_level(RuleItem(4, "top", 2, ["casual", "formal"]), target_formality=5) == 5
+    assert formality_level(RuleItem(5, "top", 2, ["casual", "formal"]), target_formality=2) == 2
 
 
 def test_stored_formality_changes_ranking():
     """同一场合下，补录了正式度的单品排序要跟着变。"""
-    plain = RuleItem(1, "top", 2, None)  # 场合为空 → 推导正式度 2
-    formal = RuleItem(2, "top", 2, None, formality=5)  # 存量 5
+    plain = RuleItem(1, "top", 2)  # 场合为空 → 推导正式度 2
+    formal = RuleItem(2, "top", 2, formality=5)  # 存量 5
 
     plan = build_outfits(
         WeatherFacts(date="2026-11-22", feels_min=9.0, feels_max=15.0),
-        [plain, formal, RuleItem(10, "bottom", 2, None), RuleItem(20, "shoes", 2, None)],
+        [plain, formal, RuleItem(10, "bottom", 2), RuleItem(20, "shoes", 2)],
         occasion="formal",
     )
 
@@ -172,7 +175,7 @@ def test_missing_bottom_reduces_outfits_and_says_so():
 
 def test_missing_bottom_but_has_dress_still_works():
     items = [item for item in wardrobe() if item.category != "bottom"]
-    items.append(RuleItem(50, "dress", 2, "casual"))
+    items.append(RuleItem(50, "dress", 2, ["casual"]))
 
     plan = build_outfits(cold(), items)
     assert len(plan.outfits) >= 1
@@ -208,7 +211,7 @@ def test_cold_without_outer_still_returns_outfits_with_notice():
 
 def test_work_excludes_sport_only_items():
     items = wardrobe()
-    items.append(RuleItem(60, "top", 2, "sport"))  # sport 专属
+    items.append(RuleItem(60, "top", 2, ["sport"]))  # sport 专属
     plan = build_outfits(
         WeatherFacts(date="2026-11-21", feels_min=12.0, feels_max=18.0),
         items,
@@ -219,7 +222,7 @@ def test_work_excludes_sport_only_items():
     assert 60 not in ids  # sport 专属不能混进通勤
     for outfit in plan.outfits:
         for item in outfit.items:
-            assert item.occasion in (None, "", "work")
+            assert not item.occasion or "work" in item.occasion
 
 
 def test_sport_occasion_allows_empty_and_sport_items():

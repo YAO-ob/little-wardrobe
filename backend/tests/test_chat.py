@@ -299,7 +299,10 @@ def test_history_is_trimmed_to_six_and_clipped(client, wardrobe, monkeypatch):
 def make_items(client, spec):
     ids = []
     for category, occasion in spec:
-        res = client.post("/api/items", json={"category": category, "warmth": 2, "occasion": occasion})
+        res = client.post(
+            "/api/items",
+            json={"category": category, "warmth": 2, "occasion": [occasion] if occasion else []},
+        )
         ids.append(res.json()["id"])
     return ids
 

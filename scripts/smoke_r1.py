@@ -49,7 +49,7 @@ def main() -> int:
             json={
                 "category": "top",
                 "warmth": 2,
-                "occasion": "casual",
+                "occasion": ["casual"],
                 "image_ids": [image["id"]],
             },
         )
