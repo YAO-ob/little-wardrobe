@@ -326,7 +326,7 @@ export default function CapturePage({ onOpenGallery }: { onOpenGallery: () => vo
       {current ? (
         <>
           <div className="relative overflow-hidden rounded-2xl bg-black/5">
-            <img src={current.preview} alt="待录入单品" className="aspect-square w-full object-cover" />
+            <img src={current.preview} alt="待录入单品" className="max-h-[38vh] w-full object-contain" />
             <span className="absolute left-2 top-2 rounded-full bg-black/70 px-2 py-0.5 text-[11px] text-white">
               待录入 {remaining}
             </span>
