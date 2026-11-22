@@ -1,27 +1,34 @@
 # 电子衣柜
 
-[![CI](https://img.shields.io/github/actions/workflow/status/YAO-ob/little-wardrobe-/ci.yml?branch=master&label=CI)](https://github.com/YAO-ob/little-wardrobe-/actions/workflows/ci.yml)
+[![CI](https://img.shields.io/github/actions/workflow/status/YAO-ob/little-wardrobe/ci.yml?branch=master&label=CI)](https://github.com/YAO-ob/little-wardrobe/actions/workflows/ci.yml)
 
 记录自己的衣服，按当天天气和场合给出搭配建议的单用户 Web 应用。
 
 **TL;DR**
 
-- A single-user wardrobe app that turns today's weather + an occasion into three outfit recommendations.
+- Little Wardrobe — a single-user wardrobe app that turns today's weather + an occasion into three outfit recommendations.
 - Stack: React + Vite + TypeScript + Tailwind · FastAPI + SQLite (WAL) + SQLAlchemy 2 + Alembic · Open-Meteo · any OpenAI-compatible LLM (BYOK).
 - Highlights: closed-set candidate selection with hard validation and one repair retry, deterministic rule-based fallback, latency/token metrics API, and a no-Docker two-command local run.
 
+![问问：一句话 → 查天气 → 筛衣橱 → 组套 → 校验](docs/screenshots/chat.png)
+
 ## 截图
 
-四张截图待补，目录已建好（除占位文件外为空，不放假图）：
+四张图都在仓库里（`docs/screenshots/`）：对话页那张放在页首当 hero，下面三张对应三个主页面。
 
-| 页面 | 文件 |
-|---|---|
-| 录入页 | `docs/screenshots/record.png` |
-| 图库 | `docs/screenshots/gallery.png` |
-| 搭配页 | `docs/screenshots/outfit.png` |
-| 问问（对话） | `docs/screenshots/chat.png` |
+**录入页** —— 拍完即入队，建议值虚框等你确认
 
-生成方式：按下方「本地运行」启动后，依次打开四个标签，各截一张 750px 宽的图，按上表命名放进 `docs/screenshots/`。
+![录入页：待录入队列 + 建议值虚框](docs/screenshots/record.png)
+
+**图库** —— 九宫格 + 品类/场合/信息不全筛选
+
+![图库：按「上衣」筛选后的九宫格](docs/screenshots/gallery.png)
+
+**搭配页** —— 天气条 + AI 精选 + 三套规则
+
+![搭配页：天气条、AI 精选徽标与三套搭配](docs/screenshots/outfit.png)
+
+生成方式：按下方「本地运行」启动后，依次打开四个标签，各截一张 750px 宽的图，按 `record` / `gallery` / `outfit` / `chat` 命名放进 `docs/screenshots/`。
 
 `chat.png` 记得**先把「执行了 N 步」展开再截**——那一条工具链（查天气 → 筛衣橱 → 组套 → 校验）是这个项目最有说服力的画面。
 
@@ -197,7 +204,7 @@ python scripts/seed_30.py     # 生成 30 件演示单品（色块图，用于�
 │   ├── adapters/         # 平台差异：上传、预览、toast、key 存取
 │   └── ui/               # 页面：录入 / 图库 / 搭配
 ├── scripts/              # seed_30.py
-├── docs/screenshots/     # 截图（待补）
+├── docs/screenshots/     # 四张截图（对话 / 录入 / 图库 / 搭配）
 └── DECISIONS.md          # 每个技术选择的理由
 ```
 
