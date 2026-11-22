@@ -153,6 +153,57 @@ FEW_SHOT: list[tuple[str, str]] = [
     ),
 ]
 
+NEGATION_WORDS = ("不要", "别", "不想", "不喜欢", "去掉", "不穿", "不想要", "受不了")
+CATEGORY_WORDS: dict[str, str] = {
+    "外套": "outer",
+    "上衣": "top",
+    "下装": "bottom",
+    "裤子": "bottom",
+    "鞋": "shoes",
+    "裙子": "dress",
+    "连衣裙": "dress",
+    "配饰": "accessory",
+}
+NEGATION_RE = re.compile(
+    r"(?:不要|不想要|别|不想|不喜欢|去掉|不穿|受不了)[^，。！？,.!?]{0,6}"
+    r"(外套|上衣|下装|裤子|鞋|裙子|连衣裙|配饰)"
+)
+CATEGORY_CN: dict[str, tuple[str, ...]] = {
+    "outer": ("外套",),
+    "top": ("上衣",),
+    "bottom": ("下装", "裤子"),
+    "shoes": ("鞋",),
+    "dress": ("裙子", "连衣裙"),
+    "accessory": ("配饰",),
+}
+CLAIM_WORDS = ("不带", "不要", "不穿", "没有", "没带", "去掉", "不配")
+
+
+def parse_negative_categories(message: str) -> list[str]:
+    """「不要外套」「别穿外套」「太厚了不想要外套」→ ['outer']。"""
+    found: list[str] = []
+    for match in NEGATION_RE.finditer(message):
+        category = CATEGORY_WORDS.get(match.group(1))
+        if category and category not in found:
+            found.append(category)
+    return found
+
+
+def reply_contradicts(
+    reply: str, outfit_categories: list[str], negative: list[str] | set[str]
+) -> bool:
+    """文案说「不带外套」但卡片里真有外套 → 矛盾，要丢弃模型文案。"""
+    text = reply or ""
+    present = set(outfit_categories)
+    for category in negative:
+        if category not in present:
+            continue
+        for word in CATEGORY_CN.get(category, ()):
+            if any(f"{claim}{word}" in text for claim in CLAIM_WORDS):
+                return True
+    return False
+
+
 HISTORY_LIMIT = 6
 HISTORY_CHAR_LIMIT = 200
 REPLY_CHAR_LIMIT = 120
@@ -295,6 +346,8 @@ class ParsedIntent:
     scene: str = ""
     # 规则层判定够确定时锁定意图，模型只能细化（场合/选品）不能推翻
     locked: bool = False
+    # 用户明确不要的品类（「不要外套」）
+    negative_categories: list[str] = field(default_factory=list)
 
 
 def parse_intent_rules(message: str) -> ParsedIntent:
@@ -309,22 +362,50 @@ def parse_intent_rules(message: str) -> ParsedIntent:
             scene = hit
             break
 
+    negative = parse_negative_categories(message)
+
     # 寒暄优先，但句子里夹了天气/场合/推荐词就不是纯寒暄
     if any(word in text for word in GREETING_WORDS) and not any(
         word in text for word in INTENT_GUARD_WORDS
     ):
-        return ParsedIntent(intent="chat", occasion=None, scene="", locked=True)
+        return ParsedIntent(
+            intent="chat", occasion=None, scene="", locked=True, negative_categories=negative
+        )
 
     # 穿着词最硬：既问了穿什么，就一定要出搭配，不能被天气词带走
     if any(word in text for word in CLOTHING_WORDS):
-        return ParsedIntent(intent="recommend", occasion=occasion, scene=scene, locked=True)
+        return ParsedIntent(
+            intent="recommend",
+            occasion=occasion,
+            scene=scene,
+            locked=True,
+            negative_categories=negative,
+        )
 
     if any(word in text for word in WEATHER_WORDS):
-        return ParsedIntent(intent="weather", occasion=occasion, scene=scene, locked=True)
+        return ParsedIntent(
+            intent="weather",
+            occasion=occasion,
+            scene=scene,
+            locked=True,
+            negative_categories=negative,
+        )
     if any(word in text for word in REROLL_WORDS):
-        return ParsedIntent(intent="reroll", occasion=occasion, scene=scene, locked=True)
+        return ParsedIntent(
+            intent="reroll",
+            occasion=occasion,
+            scene=scene,
+            locked=True,
+            negative_categories=negative,
+        )
     # 都没命中：交给模型判，模型可以选 chat / recommend / weather
-    return ParsedIntent(intent="recommend", occasion=occasion, scene=scene, locked=False)
+    return ParsedIntent(
+        intent="recommend",
+        occasion=occasion,
+        scene=scene,
+        locked=False,
+        negative_categories=negative,
+    )
 
 
 @dataclass
@@ -333,6 +414,8 @@ class ToolContext:
     city: str | None
     occasion: str | None
     exclude_ids: list[int] = field(default_factory=list)
+    # 用户明确不要的品类：从池子里剔除，且不再强制要求
+    negative: set[str] = field(default_factory=set)
     weather: WeatherResult | None = None
     rows: list[Item] = field(default_factory=list)
     rule_items: list[RuleItem] = field(default_factory=list)
@@ -367,7 +450,7 @@ async def tool_build_outfits(ctx: ToolContext) -> ToolResult:
     facts = WeatherFacts(
         date=snap.date, feels_min=snap.feels_min, feels_max=snap.feels_max
     )
-    ctx.plan = build_outfits(facts, ctx.rule_items, ctx.occasion)
+    ctx.plan = build_outfits(facts, ctx.rule_items, ctx.occasion, negative=ctx.negative)
     return f"{len(ctx.plan.outfits)} 套候选", ctx.plan
 
 
@@ -499,6 +582,33 @@ def _history_messages(payload: ChatIn) -> list[dict]:
     ]
 
 
+def _with_negative_note(text: str, ctx: ToolContext) -> str:
+    """放宽了硬规则就要把代价说清楚。"""
+    if "outer" not in ctx.negative or ctx.weather is None:
+        return text
+    snap = ctx.weather.snapshot
+    if not need_outer(snap.feels_min):
+        return text
+    if "凉" in text or "斟酌" in text:
+        return text
+    lead = "" if text.endswith(("。", "！", "？", ".", "!", "?")) else "。"
+    return f"{text}{lead}不过早晚只有 {snap.feels_min:.0f} 度，路上会凉，你自己斟酌。"
+
+
+def _guard_reply(text: str, outfits: list[RecommendOutfitOut], ctx: ToolContext) -> str:
+    """文案与卡片必须一致：说了不带外套，卡片里就不能有外套。"""
+    categories = [item.category for outfit in outfits for item in outfit.items]
+    if ctx.negative and reply_contradicts(text, categories, ctx.negative):
+        first = next(iter(ctx.negative))
+        word = CATEGORY_CN.get(first, ("那类",))[0]
+        feels = ctx.weather.snapshot.feels_min if ctx.weather else None
+        because = f"因为今天最低 {feels:.0f} 度" if feels is not None else "因为天气条件"
+        return (
+            f"这几套里仍有{word}，{because}；如果你坚持不穿，说「不穿{word}」我再排一次。"
+        )
+    return _with_negative_note(text, ctx)
+
+
 def _user_prompt(message: str, ctx: ToolContext, pool: list[RuleItem], weather_note: str) -> str:
     lines = [
         f"用户这句话：{message}",
@@ -576,6 +686,7 @@ async def chat(
         city=city_signal or payload.city,
         occasion=None if relaxed else (payload.occasion or parsed.occasion),
         exclude_ids=list(payload.exclude_ids or []),
+        negative=set(parsed.negative_categories),
     )
 
     scope_note: str | None = None
@@ -642,18 +753,19 @@ async def chat(
                 fallback_reason=None,
             )
         rules_now = _rules_outfits(ctx)
+        base_reply = (
+            _empty_outfit_reply(ctx)
+            if parsed.intent == "recommend" and not rules_now
+            else _template_reply(parsed.intent, ctx.occasion, parsed.scene, ctx, scope_note)
+        )
         return ChatOut(
-            reply=(
-                _empty_outfit_reply(ctx)
-                if parsed.intent == "recommend" and not rules_now
-                else _template_reply(parsed.intent, ctx.occasion, parsed.scene, ctx, scope_note)
-            ),
+            reply=_guard_reply(base_reply, rules_now, ctx),
             intent=parsed.intent,
             occasion=ctx.occasion,
             trace=trace,
             outfits=rules_now,
             source="rules",
-            fallback_reason=None,
+            fallback_reason="no_key",
         )
 
     # --- 有 key：一次调用同时拿回复 + 意图 + 选品 ---
@@ -664,7 +776,15 @@ async def chat(
         if snap
         else WeatherFacts(date="", feels_min=18.0, feels_max=22.0)
     )
-    pool = build_pool(facts, ctx.rule_items, ctx.occasion) if ctx.rule_items else []
+    pool = (
+        build_pool(
+            facts,
+            [item for item in ctx.rule_items if item.category not in ctx.negative],
+            ctx.occasion,
+        )
+        if ctx.rule_items
+        else []
+    )
     weather_note = (
         f"{snap.city} {weather_text(snap.weather_code)} {snap.t_min:.1f}–{snap.t_max:.1f}℃"
         if snap
@@ -733,6 +853,7 @@ async def chat(
             text = _empty_outfit_reply(ctx)
         elif final_intent == "recommend" and has_relaxed:
             text = _relaxed_reply(ctx)
+        text = _guard_reply(text, outfits, ctx)
         return ChatOut(
             reply=text,
             intent=final_intent,
@@ -782,6 +903,8 @@ async def chat(
         return finish(final_intent=final_intent, outfits=[], source="llm", reason=None)
 
     want_outer = need_outer(snap.feels_min) if snap else False
+    if "outer" in ctx.negative:
+        want_outer = False
     chosen, problems = validate_selection({"item_ids": raw_ids}, pool, want_outer)
 
     if chosen is None and problems:

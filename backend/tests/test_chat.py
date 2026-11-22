@@ -594,3 +594,56 @@ def test_generic_wear_question_prompt_forbids_note_mention(client, wardrobe, mon
     assert body["intent"] == "recommend"
     prompt = FakeClient.last_messages[0]["content"]
     assert "泛问" in prompt  # prompt 里有「泛问不要提备注」的约束
+
+
+# --- W19：否定约束与文案一致性 -------------------------------------------
+
+
+def test_negative_outer_drops_outer_from_outfits(client, wardrobe):
+    body = chat(client, "不要外套，今天穿什么")
+
+    assert body["outfits"]
+    for outfit in body["outfits"]:
+        assert all(item["category"] != "outer" for item in outfit["items"])
+    # 放宽了硬规则就要说清楚代价
+    assert "凉" in body["reply"] or "斟酌" in body["reply"]
+
+
+def test_negative_outer_without_base_items_returns_empty(client):
+    make_items(client, [("outer", None), ("outer", None)])
+
+    body = chat(client, "不要外套，今天穿什么")
+
+    assert body["outfits"] == []
+    assert body["reply"]
+
+
+def test_reply_contradicts_detects_claim_vs_card():
+    from app.chat import reply_contradicts
+
+    assert reply_contradicts("行，不带外套。", ["outer"], ["outer"]) is True
+    assert reply_contradicts("今天不穿外套。", ["top"], ["outer"]) is False
+    assert reply_contradicts("带了外套。", ["outer"], ["outer"]) is False
+
+
+def test_guard_replaces_contradicting_reply():
+    from app.chat import ToolContext, _guard_reply
+    from app.schemas import RecommendItemOut, RecommendOutfitOut
+
+    outfit = RecommendOutfitOut(
+        items=[RecommendItemOut(id=1, category="outer", warmth=3, layer="outer", thumb_url=None)],
+        reason="冷",
+    )
+    ctx = ToolContext(db=None, city="杭州", occasion=None, negative={"outer"})
+
+    guarded = _guard_reply("行，不带外套，给你排了别的。", [outfit], ctx)
+
+    assert "仍有外套" in guarded
+    assert "不穿外套" in guarded
+
+
+def test_no_key_reports_fallback_reason(client, wardrobe):
+    body = chat(client, "今天穿什么")
+
+    assert body["source"] == "rules"
+    assert body["fallback_reason"] == "no_key"

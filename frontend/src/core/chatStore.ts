@@ -13,6 +13,8 @@ export interface ChatMessage {
   /** 出错时保留原文，供「重试」用 */
   retryText?: string
   failed?: boolean
+  /** 后端降级原因（no_key / rate_limited / invalid_ids …），用于气泡下方小字 */
+  reason?: string | null
 }
 
 interface ChatState {

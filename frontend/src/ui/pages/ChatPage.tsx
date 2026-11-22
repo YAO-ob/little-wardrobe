@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { sendChat } from '../../core/api'
 import { useChatStore } from '../../core/chatStore'
+import { fallbackHint } from '../../core/chatFallback'
 import { makeDraftId } from '../../core/drafts'
 import { FALLBACK_CITIES } from '../../core/cities'
 import { getCity } from '../../adapters/city'
@@ -68,6 +69,7 @@ export default function ChatPage({ onOpenCapture }: { onOpenCapture: () => void 
         intent: reply.intent,
         trace: reply.trace,
         outfits: reply.outfits,
+        reason: reply.fallback_reason,
       })
     } catch (err) {
       append({
@@ -140,6 +142,10 @@ export default function ChatPage({ onOpenCapture }: { onOpenCapture: () => void 
                       >
                         重试
                       </button>
+                    )}
+
+                    {fallbackHint(message.reason) && (
+                      <p className="text-[11px] text-amber-700">{fallbackHint(message.reason)}</p>
                     )}
 
                     {message.trace && message.trace.length > 0 && (

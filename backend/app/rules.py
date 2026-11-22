@@ -278,9 +278,15 @@ def build_outfits(
     facts: WeatherFacts,
     items: list[RuleItem],
     occasion: str | None = None,
+    negative: set[str] | None = None,
 ) -> RecommendPlan:
+    # 用户明确说不要的品类：从候选里剔掉，并且不再强制要求（否则校验必挂）
+    excluded = negative or set()
+    if excluded:
+        items = [item for item in items if item.category not in excluded]
+
     target_warmth = need_warmth(facts.feels_min)
-    want_outer = need_outer(facts.feels_min)
+    want_outer = need_outer(facts.feels_min) and "outer" not in excluded
     want_extra = need_extra(facts.feels_min, facts.feels_max)
     target_formality = formality_of(occasion)
 
